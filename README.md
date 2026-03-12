@@ -33,7 +33,7 @@ msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
 ## Install
 
 1. Build the project successfully.
-2. Copy `ProcessTrafficPlugin.dll` into the `plugins` folder next to `TrafficMonitor.exe`.
+2. Copy `ProcessTrafficPlugin.dll` into the `plugins`.
 3. Start TrafficMonitor **as Administrator**.
 4. Open the plugin manager and confirm that the plugin is loaded.
 
