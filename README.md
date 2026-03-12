@@ -1,9 +1,4 @@
 
----
-
-# 2）README.zh-CN.md（中文页）
-
-```markdown
 # TrafficMonitor 流量统计插件
 
 简体中文 | [English](./README.En.md)
