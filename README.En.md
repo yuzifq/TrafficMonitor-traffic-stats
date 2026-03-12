@@ -4,6 +4,9 @@
 
 A TrafficMonitor plugin for monitoring **per-process network traffic** in real time and in accumulated history.
 
+This project is a third-party plugin for [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor).  
+It is not part of the official TrafficMonitor project.
+
 ## Features
 
 - Real-time upload and download statistics for each process
