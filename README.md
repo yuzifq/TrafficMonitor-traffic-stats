@@ -4,6 +4,8 @@
 简体中文 | [English](./README.En.md)
 
 一个用于 TrafficMonitor 的插件，可实时监控**每个进程的网络流量**，并统计累计历史流量。
+本项目是 [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor) 的第三方插件，  
+并非 TrafficMonitor 官方项目的一部分。
 
 ## 功能特性
 
