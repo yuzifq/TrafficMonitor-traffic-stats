@@ -52,13 +52,15 @@
 msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
 ```
 
-##进入入口
+## 进入入口
 
 右键程序进入插件管理
+
 <img width="587" height="533" alt="image" src="https://github.com/user-attachments/assets/32f020d1-56d8-4d96-8db1-20829a1b6243" />
 
 
 再次右键插件进入流量详情
+
 <img width="710" height="462" alt="image" src="https://github.com/user-attachments/assets/e9ece008-b293-482a-adcd-f8b49aafc6fc" />
 
 
