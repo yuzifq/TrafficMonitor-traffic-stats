@@ -28,6 +28,7 @@ You can also build from the command line with MSBuild:
 
 ```powershell
 msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
+```
 
 ## Install
 
