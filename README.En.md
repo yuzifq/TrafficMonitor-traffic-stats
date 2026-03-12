@@ -49,3 +49,19 @@ You can also build from the command line with MSBuild:
 
 ```powershell
 msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
+```
+
+# Open the main interface
+
+## Right-click the program and open Plugin Management
+
+<img width="587" height="533" alt="image" src="https://github.com/user-attachments/assets/32f020d1-56d8-4d96-8db1-20829a1b6243" />
+
+
+## Right-click the plugin again to open Traffic Details
+
+<img width="710" height="462" alt="image" src="https://github.com/user-attachments/assets/e9ece008-b293-482a-adcd-f8b49aafc6fc" />
+
+
+<img width="897" height="620" alt="image" src="https://github.com/user-attachments/assets/ed9b9f6a-befa-4301-acb7-1157e272b63e" />
+<img width="920" height="620" alt="image" src="https://github.com/user-attachments/assets/ab1d1180-ad20-4882-964d-30e3774cda1f" />
