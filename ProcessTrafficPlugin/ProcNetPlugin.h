@@ -39,10 +39,10 @@ public:
     void OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data) override;
 
     std::vector<AppTrafficEntry> BuildAllApps() const;
-    std::vector<AppTrafficEntry> BuildHistoryApps(CHistoryTrafficStore::PeriodMode period_mode) const;
-    std::wstring BuildTotalsText(CHistoryTrafficStore::PeriodMode period_mode, CHistoryTrafficStore::DisplayLanguage language) const;
-    CHistoryTrafficStore::PeriodMode GetPreferredPeriodMode() const;
-    void SetPreferredPeriodMode(CHistoryTrafficStore::PeriodMode period_mode);
+    std::vector<AppTrafficEntry> BuildHistoryApps(const CHistoryTrafficStore::DateTimeRange& range) const;
+    std::wstring BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range, CHistoryTrafficStore::DisplayLanguage language) const;
+    CHistoryTrafficStore::DateTimeRange GetPreferredRange() const;
+    void SetPreferredRange(const CHistoryTrafficStore::DateTimeRange& range);
     CHistoryTrafficStore::DisplayLanguage GetPreferredLanguage() const;
     void SetPreferredLanguage(CHistoryTrafficStore::DisplayLanguage language);
 

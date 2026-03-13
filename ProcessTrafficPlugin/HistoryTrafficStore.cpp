@@ -1,7 +1,8 @@
-﻿#include "HistoryTrafficStore.h"
+#include "HistoryTrafficStore.h"
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -21,34 +22,6 @@ void AddAmount(CHistoryTrafficStore::TrafficAmount& target, const CHistoryTraffi
     target.rxBytes += delta.rxBytes;
     target.txBytes += delta.txBytes;
 }
-
-std::wstring GetCurrentDateKey(const wchar_t* format)
-{
-    SYSTEMTIME local_time{};
-    GetLocalTime(&local_time);
-    wchar_t buffer[16]{};
-    swprintf_s(buffer, format, local_time.wYear, local_time.wMonth, local_time.wDay);
-    return buffer;
-}
-
-bool MatchesPeriod(const std::wstring& date_key, CHistoryTrafficStore::PeriodMode period_mode)
-{
-    const std::wstring today_key = GetCurrentDateKey(L"%04u-%02u-%02u");
-    const std::wstring month_key = today_key.substr(0, 7);
-    const std::wstring year_key = today_key.substr(0, 4);
-
-    switch (period_mode)
-    {
-    case CHistoryTrafficStore::PeriodMode::Day:
-        return date_key == today_key;
-    case CHistoryTrafficStore::PeriodMode::Month:
-        return date_key.rfind(month_key, 0) == 0;
-    case CHistoryTrafficStore::PeriodMode::Year:
-        return date_key.rfind(year_key, 0) == 0;
-    default:
-        return false;
-    }
-}
 }
 
 void CHistoryTrafficStore::Initialize(const std::wstring& base_dir)
@@ -67,8 +40,8 @@ void CHistoryTrafficStore::Initialize(const std::wstring& base_dir)
 void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
 {
     EnsureLoaded();
-    const auto today = GetTodayKey();
-    auto& daily = m_dailyByApp[today];
+    const auto bucket_key = GetCurrentMinuteKey();
+    auto& bucket = m_bucketByApp[bucket_key];
 
     for (const auto& app : apps)
     {
@@ -83,7 +56,7 @@ void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
 
         if (delta.rxBytes != 0 || delta.txBytes != 0)
         {
-            auto& stored = daily[app.appName];
+            auto& stored = bucket[app.appName];
             stored.rxBytes += delta.rxBytes;
             stored.txBytes += delta.txBytes;
             m_dirty = true;
@@ -100,18 +73,28 @@ void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
     SaveState();
 }
 
-std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetPeriodAppTotals(PeriodMode period_mode) const
+std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeAppTotals(const DateTimeRange& range) const
 {
     const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
+    const auto normalized = NormalizeRange(range);
+    const auto start_key = ToMinuteKey(normalized.start);
+    const auto end_key = ToMinuteKey(normalized.end);
 
     std::unordered_map<std::wstring, TrafficAmount> totals_by_app;
-    for (const auto& day_entry : m_dailyByApp)
+    for (const auto& bucket_entry : m_bucketByApp)
     {
-        if (!MatchesPeriod(day_entry.first, period_mode))
+        std::wstring bucket_key = bucket_entry.first;
+        if (bucket_key.size() == 10)
+        {
+            bucket_key += L" 00:00";
+        }
+
+        if (bucket_key < start_key || bucket_key > end_key)
         {
             continue;
         }
-        for (const auto& app_entry : day_entry.second)
+
+        for (const auto& app_entry : bucket_entry.second)
         {
             AddAmount(totals_by_app[app_entry.first], app_entry.second);
         }
@@ -127,14 +110,13 @@ std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetPeriod
         item.txTotalBytes = entry.second.txBytes;
         result.push_back(item);
     }
-
     return result;
 }
 
-CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::GetPeriodTotal(PeriodMode period_mode) const
+CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::GetRangeTotal(const DateTimeRange& range) const
 {
     TrafficAmount total{};
-    const auto apps = GetPeriodAppTotals(period_mode);
+    const auto apps = GetRangeAppTotals(range);
     for (const auto& app : apps)
     {
         total.rxBytes += app.rxTotalBytes;
@@ -148,9 +130,9 @@ CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::GetAllTimeTotal() cons
     const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
 
     TrafficAmount total{};
-    for (const auto& day_entry : m_dailyByApp)
+    for (const auto& bucket_entry : m_bucketByApp)
     {
-        for (const auto& app_entry : day_entry.second)
+        for (const auto& app_entry : bucket_entry.second)
         {
             AddAmount(total, app_entry.second);
         }
@@ -158,21 +140,16 @@ CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::GetAllTimeTotal() cons
     return total;
 }
 
-CHistoryTrafficStore::PeriodMode CHistoryTrafficStore::GetPreferredPeriodMode() const
+CHistoryTrafficStore::DateTimeRange CHistoryTrafficStore::GetPreferredRange() const
 {
     const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
-    return m_preferredPeriodMode;
+    return m_preferredRange;
 }
 
-void CHistoryTrafficStore::SetPreferredPeriodMode(PeriodMode period_mode)
+void CHistoryTrafficStore::SetPreferredRange(const DateTimeRange& range)
 {
     EnsureLoaded();
-    if (m_preferredPeriodMode == period_mode)
-    {
-        return;
-    }
-
-    m_preferredPeriodMode = period_mode;
+    m_preferredRange = NormalizeRange(range);
     SaveState();
 }
 
@@ -217,7 +194,7 @@ void CHistoryTrafficStore::EnsureLoaded()
 
 void CHistoryTrafficStore::Load()
 {
-    m_dailyByApp.clear();
+    m_bucketByApp.clear();
     if (m_filePath.empty() || !std::filesystem::exists(m_filePath))
     {
         return;
@@ -228,11 +205,11 @@ void CHistoryTrafficStore::Load()
     while (std::getline(input, line))
     {
         std::wistringstream stream(line);
-        std::wstring date_key;
+        std::wstring bucket_key;
         std::wstring app_name;
         std::wstring rx_text;
         std::wstring tx_text;
-        if (!std::getline(stream, date_key, L'\t') ||
+        if (!std::getline(stream, bucket_key, L'\t') ||
             !std::getline(stream, app_name, L'\t') ||
             !std::getline(stream, rx_text, L'\t') ||
             !std::getline(stream, tx_text, L'\t'))
@@ -240,7 +217,7 @@ void CHistoryTrafficStore::Load()
             continue;
         }
 
-        auto& entry = m_dailyByApp[date_key][app_name];
+        auto& entry = m_bucketByApp[bucket_key][app_name];
         entry.rxBytes = _wcstoui64(rx_text.c_str(), nullptr, 10);
         entry.txBytes = _wcstoui64(tx_text.c_str(), nullptr, 10);
     }
@@ -254,11 +231,11 @@ void CHistoryTrafficStore::Save() const
     }
 
     std::wofstream output{ std::filesystem::path(m_filePath), std::ios::trunc };
-    for (const auto& day_entry : m_dailyByApp)
+    for (const auto& bucket_entry : m_bucketByApp)
     {
-        for (const auto& app_entry : day_entry.second)
+        for (const auto& app_entry : bucket_entry.second)
         {
-            output << day_entry.first << L'\t'
+            output << bucket_entry.first << L'\t'
                    << app_entry.first << L'\t'
                    << app_entry.second.rxBytes << L'\t'
                    << app_entry.second.txBytes << L'\n';
@@ -269,7 +246,7 @@ void CHistoryTrafficStore::Save() const
 void CHistoryTrafficStore::LoadState()
 {
     m_lastSeenTotals.clear();
-    m_preferredPeriodMode = PeriodMode::Day;
+    m_preferredRange = GetDefaultRange();
     m_preferredLanguage = DisplayLanguage::English;
 
     if (m_stateFilePath.empty() || !std::filesystem::exists(m_stateFilePath))
@@ -288,34 +265,36 @@ void CHistoryTrafficStore::LoadState()
             continue;
         }
 
-        if (type == L"period")
+        if (type == L"language")
         {
             std::wstring value_text;
-            if (!std::getline(stream, value_text, L'\t'))
+            if (std::getline(stream, value_text, L'\t'))
             {
-                continue;
-            }
-
-            const int value = _wtoi(value_text.c_str());
-            if (value >= static_cast<int>(PeriodMode::Day) && value <= static_cast<int>(PeriodMode::Year))
-            {
-                m_preferredPeriodMode = static_cast<PeriodMode>(value);
+                const int value = _wtoi(value_text.c_str());
+                if (value >= static_cast<int>(DisplayLanguage::English) && value <= static_cast<int>(DisplayLanguage::Chinese))
+                {
+                    m_preferredLanguage = static_cast<DisplayLanguage>(value);
+                }
             }
             continue;
         }
 
-        if (type == L"language")
+        if (type == L"range_start")
         {
             std::wstring value_text;
-            if (!std::getline(stream, value_text, L'\t'))
+            if (std::getline(stream, value_text, L'\t'))
             {
-                continue;
+                TryParseStoredTime(value_text, m_preferredRange.start);
             }
+            continue;
+        }
 
-            const int value = _wtoi(value_text.c_str());
-            if (value >= static_cast<int>(DisplayLanguage::English) && value <= static_cast<int>(DisplayLanguage::Chinese))
+        if (type == L"range_end")
+        {
+            std::wstring value_text;
+            if (std::getline(stream, value_text, L'\t'))
             {
-                m_preferredLanguage = static_cast<DisplayLanguage>(value);
+                TryParseStoredTime(value_text, m_preferredRange.end);
             }
             continue;
         }
@@ -339,6 +318,8 @@ void CHistoryTrafficStore::LoadState()
         entry.rxBytes = _wcstoui64(rx_text.c_str(), nullptr, 10);
         entry.txBytes = _wcstoui64(tx_text.c_str(), nullptr, 10);
     }
+
+    m_preferredRange = NormalizeRange(m_preferredRange);
 }
 
 void CHistoryTrafficStore::SaveState() const
@@ -348,9 +329,11 @@ void CHistoryTrafficStore::SaveState() const
         return;
     }
 
+    const auto normalized = NormalizeRange(m_preferredRange);
     std::wofstream output{ std::filesystem::path(m_stateFilePath), std::ios::trunc };
-    output << L"period\t" << static_cast<int>(m_preferredPeriodMode) << L'\n';
     output << L"language\t" << static_cast<int>(m_preferredLanguage) << L'\n';
+    output << L"range_start\t" << ToStateText(normalized.start) << L'\n';
+    output << L"range_end\t" << ToStateText(normalized.end) << L'\n';
     for (const auto& entry : m_lastSeenTotals)
     {
         output << L"last\t"
@@ -360,32 +343,87 @@ void CHistoryTrafficStore::SaveState() const
     }
 }
 
-std::wstring CHistoryTrafficStore::GetTodayKey()
+CHistoryTrafficStore::DateTimeRange CHistoryTrafficStore::GetDefaultRange()
+{
+    DateTimeRange range{};
+    GetLocalTime(&range.end);
+    range.start = range.end;
+    range.start.wHour = 0;
+    range.start.wMinute = 0;
+    range.start.wSecond = 0;
+    range.start.wMilliseconds = 0;
+    range.end.wSecond = 0;
+    range.end.wMilliseconds = 0;
+    return range;
+}
+
+CHistoryTrafficStore::DateTimeRange CHistoryTrafficStore::NormalizeRange(const DateTimeRange& range)
+{
+    DateTimeRange normalized = range;
+    normalized.start.wSecond = 0;
+    normalized.start.wMilliseconds = 0;
+    normalized.end.wSecond = 0;
+    normalized.end.wMilliseconds = 0;
+
+    if (ToFileTimeValue(normalized.start) > ToFileTimeValue(normalized.end))
+    {
+        normalized.end = normalized.start;
+    }
+
+    return normalized;
+}
+
+std::wstring CHistoryTrafficStore::GetCurrentMinuteKey()
 {
     SYSTEMTIME local_time{};
     GetLocalTime(&local_time);
-    wchar_t buffer[16]{};
-    swprintf_s(buffer, L"%04u-%02u-%02u", local_time.wYear, local_time.wMonth, local_time.wDay);
-    return buffer;
+    return ToMinuteKey(local_time);
 }
 
-std::wstring CHistoryTrafficStore::GetMonthKey()
+std::wstring CHistoryTrafficStore::ToMinuteKey(const SYSTEMTIME& time)
 {
-    SYSTEMTIME local_time{};
-    GetLocalTime(&local_time);
-    wchar_t buffer[8]{};
-    swprintf_s(buffer, L"%04u-%02u", local_time.wYear, local_time.wMonth);
+    wchar_t buffer[20]{};
+    swprintf_s(buffer, L"%04u-%02u-%02u %02u:%02u", time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute);
     return buffer;
 }
 
-std::wstring CHistoryTrafficStore::GetYearKey()
+std::wstring CHistoryTrafficStore::ToStateText(const SYSTEMTIME& time)
 {
-    SYSTEMTIME local_time{};
-    GetLocalTime(&local_time);
-    wchar_t buffer[8]{};
-    swprintf_s(buffer, L"%04u", local_time.wYear);
+    wchar_t buffer[20]{};
+    swprintf_s(buffer, L"%04u-%02u-%02u %02u:%02u", time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute);
     return buffer;
 }
 
+bool CHistoryTrafficStore::TryParseStoredTime(const std::wstring& text, SYSTEMTIME& time)
+{
+    SYSTEMTIME parsed{};
+    if (swscanf_s(text.c_str(), L"%hu-%hu-%hu %hu:%hu",
+        &parsed.wYear,
+        &parsed.wMonth,
+        &parsed.wDay,
+        &parsed.wHour,
+        &parsed.wMinute) != 5)
+    {
+        return false;
+    }
 
+    parsed.wSecond = 0;
+    parsed.wMilliseconds = 0;
+    time = parsed;
+    return true;
+}
 
+ULONGLONG CHistoryTrafficStore::ToFileTimeValue(const SYSTEMTIME& time)
+{
+    FILETIME file_time{};
+    SYSTEMTIME local = time;
+    if (SystemTimeToFileTime(&local, &file_time) == FALSE)
+    {
+        return 0;
+    }
+
+    ULARGE_INTEGER value{};
+    value.LowPart = file_time.dwLowDateTime;
+    value.HighPart = file_time.dwHighDateTime;
+    return value.QuadPart;
+}

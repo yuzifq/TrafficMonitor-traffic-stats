@@ -23,18 +23,23 @@ constexpr int kToggleViewButtonId = 1001;
 constexpr int kPauseRefreshButtonId = 1002;
 constexpr int kLanguageLabelId = 1007;
 constexpr int kLanguageComboId = 1008;
+constexpr int kStartLabelId = 1005;
+constexpr int kStartDatePickerId = 1006;
+constexpr int kStartTimePickerId = 1011;
+constexpr int kEndLabelId = 1009;
+constexpr int kEndDatePickerId = 1010;
+constexpr int kEndTimePickerId = 1012;
 constexpr int kSummaryId = 1003;
 constexpr int kListId = 1004;
-constexpr int kPeriodLabelId = 1005;
-constexpr int kPeriodComboId = 1006;
 constexpr int kMargin = 10;
 constexpr int kButtonWidth = 160;
 constexpr int kButtonHeight = 28;
 constexpr int kLanguageLabelWidth = 76;
 constexpr int kLanguageComboWidth = 110;
-constexpr int kComboWidth = 120;
-constexpr int kLabelWidth = 80;
-constexpr int kSummaryWidth = 280;
+constexpr int kRangeLabelWidth = 84;
+constexpr int kRangeDateWidth = 130;
+constexpr int kRangeTimeWidth = 88;
+constexpr int kSummaryWidth = 350;
 constexpr int kSummaryHeight = 150;
 
 void AddColumn(HWND list, int index, int width, const wchar_t* title, int format = LVCFMT_LEFT)
@@ -78,8 +83,12 @@ CTrafficDetailWindow::CTrafficDetailWindow(CProcNetPlugin& plugin)
       m_languageLabel(nullptr),
       m_languageCombo(nullptr),
       m_pauseRefreshButton(nullptr),
-      m_periodLabel(nullptr),
-      m_periodCombo(nullptr),
+      m_startLabel(nullptr),
+      m_startDatePicker(nullptr),
+      m_startTimePicker(nullptr),
+      m_endLabel(nullptr),
+      m_endDatePicker(nullptr),
+      m_endTimePicker(nullptr),
       m_summary(nullptr),
       m_smallImageList(nullptr),
       m_viewMode(ViewMode::Realtime),
@@ -125,7 +134,7 @@ void CTrafficDetailWindow::EnsureCommonControlsInitialized()
 
     INITCOMMONCONTROLSEX icc{};
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_LISTVIEW_CLASSES;
+    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_DATE_CLASSES;
     InitCommonControlsEx(&icc);
     initialized = true;
 }
@@ -162,7 +171,7 @@ void CTrafficDetailWindow::CreateOrActivate(HWND parent)
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        920,
+        1180,
         620,
         parent,
         nullptr,
@@ -197,16 +206,25 @@ void CTrafficDetailWindow::RefreshView()
         FillRealtimeView();
         SetWindowTextW(m_summary, L"");
         ShowWindow(m_summary, SW_HIDE);
+        ShowWindow(m_startLabel, SW_HIDE);
+        ShowWindow(m_startDatePicker, SW_HIDE);
+        ShowWindow(m_startTimePicker, SW_HIDE);
+        ShowWindow(m_endLabel, SW_HIDE);
+        ShowWindow(m_endDatePicker, SW_HIDE);
+        ShowWindow(m_endTimePicker, SW_HIDE);
     }
     else
     {
         FillTotalView();
-        SetWindowTextW(m_summary, m_plugin.BuildTotalsText(GetSelectedPeriodMode(), GetSelectedLanguage()).c_str());
+        SetWindowTextW(m_summary, m_plugin.BuildTotalsText(GetSelectedRange(), GetSelectedLanguage()).c_str());
         ShowWindow(m_summary, SW_SHOW);
+        ShowWindow(m_startLabel, SW_SHOW);
+        ShowWindow(m_startDatePicker, SW_SHOW);
+        ShowWindow(m_startTimePicker, SW_SHOW);
+        ShowWindow(m_endLabel, SW_SHOW);
+        ShowWindow(m_endDatePicker, SW_SHOW);
+        ShowWindow(m_endTimePicker, SW_SHOW);
     }
-
-    ShowWindow(m_periodLabel, SW_SHOW);
-    ShowWindow(m_periodCombo, SW_SHOW);
 
     const int item_count = ListView_GetItemCount(m_list);
     if (selected_index >= 0 && selected_index < item_count)
@@ -265,9 +283,13 @@ void CTrafficDetailWindow::ApplyLanguageTexts()
     {
         SetWindowTextW(m_languageLabel, english ? L"Language:" : L"语言:");
     }
-    if (m_periodLabel != nullptr)
+    if (m_startLabel != nullptr)
     {
-        SetWindowTextW(m_periodLabel, english ? L"Period:" : L"统计范围:");
+        SetWindowTextW(m_startLabel, english ? L"Start:" : L"开始时间:");
+    }
+    if (m_endLabel != nullptr)
+    {
+        SetWindowTextW(m_endLabel, english ? L"End:" : L"结束时间:");
     }
 
     if (m_languageCombo != nullptr)
@@ -279,15 +301,7 @@ void CTrafficDetailWindow::ApplyLanguageTexts()
         ComboBox_SetCurSel(m_languageCombo, current >= 0 ? current : 0);
     }
 
-    if (m_periodCombo != nullptr)
-    {
-        const int current = ComboBox_GetCurSel(m_periodCombo);
-        ComboBox_ResetContent(m_periodCombo);
-        ComboBox_AddString(m_periodCombo, english ? L"Day" : L"日");
-        ComboBox_AddString(m_periodCombo, english ? L"Month" : L"月");
-        ComboBox_AddString(m_periodCombo, english ? L"Year" : L"年");
-        ComboBox_SetCurSel(m_periodCombo, current >= 0 ? current : static_cast<int>(m_plugin.GetPreferredPeriodMode()));
-    }
+    ApplyRangeControls();
 }
 
 void CTrafficDetailWindow::UpdateWindowTitle()
@@ -310,6 +324,26 @@ void CTrafficDetailWindow::UpdateButtonText()
         m_refreshPaused
             ? (english ? L"Resume Refresh" : L"继续刷新界面")
             : (english ? L"Pause Refresh" : L"暂停刷新界面"));
+}
+
+void CTrafficDetailWindow::ApplyRangeControls()
+{
+    if (m_startDatePicker != nullptr)
+    {
+        DateTime_SetFormat(m_startDatePicker, L"yyyy-MM-dd");
+    }
+    if (m_startTimePicker != nullptr)
+    {
+        DateTime_SetFormat(m_startTimePicker, L"HH:mm");
+    }
+    if (m_endDatePicker != nullptr)
+    {
+        DateTime_SetFormat(m_endDatePicker, L"yyyy-MM-dd");
+    }
+    if (m_endTimePicker != nullptr)
+    {
+        DateTime_SetFormat(m_endTimePicker, L"HH:mm");
+    }
 }
 
 void CTrafficDetailWindow::EnsureColumnsForCurrentView()
@@ -397,7 +431,7 @@ void CTrafficDetailWindow::FillRealtimeView()
 
 void CTrafficDetailWindow::FillTotalView()
 {
-    auto apps = m_plugin.BuildHistoryApps(GetSelectedPeriodMode());
+    auto apps = m_plugin.BuildHistoryApps(GetSelectedRange());
     std::sort(apps.begin(), apps.end(), [](const CProcNetPlugin::AppTrafficEntry& left, const CProcNetPlugin::AppTrafficEntry& right) {
         return (left.rxTotalBytes + left.txTotalBytes) > (right.rxTotalBytes + right.txTotalBytes);
     });
@@ -548,14 +582,6 @@ void CTrafficDetailWindow::ResizeChildren(int width, int height)
     {
         MoveWindow(m_pauseRefreshButton, right_button_x, kMargin, kButtonWidth, kButtonHeight, TRUE);
     }
-    if (m_periodLabel != nullptr)
-    {
-        MoveWindow(m_periodLabel, right_button_x - kLabelWidth - kComboWidth - 16, kMargin + 4, kLabelWidth, 20, TRUE);
-    }
-    if (m_periodCombo != nullptr)
-    {
-        MoveWindow(m_periodCombo, right_button_x - kComboWidth - 8, kMargin, kComboWidth, 400, TRUE);
-    }
 
     const int top = kMargin + kButtonHeight + 10;
     if (m_viewMode == ViewMode::Realtime)
@@ -570,6 +596,34 @@ void CTrafficDetailWindow::ResizeChildren(int width, int height)
     if (m_summary != nullptr)
     {
         MoveWindow(m_summary, kMargin, height - kMargin - kSummaryHeight, kSummaryWidth, kSummaryHeight, TRUE);
+    }
+
+    const int range_block_left = kMargin + kSummaryWidth + 16;
+    const int range_block_top = height - kMargin - kSummaryHeight;
+    const int picker_left = range_block_left + kRangeLabelWidth;
+    if (m_startLabel != nullptr)
+    {
+        MoveWindow(m_startLabel, range_block_left, range_block_top + 4, kRangeLabelWidth, 20, TRUE);
+    }
+    if (m_startDatePicker != nullptr)
+    {
+        MoveWindow(m_startDatePicker, picker_left, range_block_top, kRangeDateWidth, 28, TRUE);
+    }
+    if (m_startTimePicker != nullptr)
+    {
+        MoveWindow(m_startTimePicker, picker_left + kRangeDateWidth + 8, range_block_top, kRangeTimeWidth, 28, TRUE);
+    }
+    if (m_endLabel != nullptr)
+    {
+        MoveWindow(m_endLabel, range_block_left, range_block_top + 40, kRangeLabelWidth, 20, TRUE);
+    }
+    if (m_endDatePicker != nullptr)
+    {
+        MoveWindow(m_endDatePicker, picker_left, range_block_top + 36, kRangeDateWidth, 28, TRUE);
+    }
+    if (m_endTimePicker != nullptr)
+    {
+        MoveWindow(m_endTimePicker, picker_left + kRangeDateWidth + 8, range_block_top + 36, kRangeTimeWidth, 28, TRUE);
     }
 
     if (m_list != nullptr)
@@ -588,22 +642,43 @@ void CTrafficDetailWindow::SetListText(int row, int column, const wchar_t* text)
     ListView_SetItemText(m_list, row, column, const_cast<LPWSTR>(text));
 }
 
-CHistoryTrafficStore::PeriodMode CTrafficDetailWindow::GetSelectedPeriodMode() const
+CHistoryTrafficStore::DateTimeRange CTrafficDetailWindow::GetSelectedRange() const
 {
-    if (m_periodCombo == nullptr)
-    {
-        return CHistoryTrafficStore::PeriodMode::Day;
-    }
+    auto range = m_plugin.GetPreferredRange();
+    SYSTEMTIME date_part{};
+    SYSTEMTIME time_part{};
 
-    switch (ComboBox_GetCurSel(m_periodCombo))
+    if (m_startDatePicker != nullptr)
     {
-    case 1:
-        return CHistoryTrafficStore::PeriodMode::Month;
-    case 2:
-        return CHistoryTrafficStore::PeriodMode::Year;
-    default:
-        return CHistoryTrafficStore::PeriodMode::Day;
+        DateTime_GetSystemtime(m_startDatePicker, &date_part);
+        range.start.wYear = date_part.wYear;
+        range.start.wMonth = date_part.wMonth;
+        range.start.wDay = date_part.wDay;
     }
+    if (m_startTimePicker != nullptr)
+    {
+        DateTime_GetSystemtime(m_startTimePicker, &time_part);
+        range.start.wHour = time_part.wHour;
+        range.start.wMinute = time_part.wMinute;
+    }
+    if (m_endDatePicker != nullptr)
+    {
+        DateTime_GetSystemtime(m_endDatePicker, &date_part);
+        range.end.wYear = date_part.wYear;
+        range.end.wMonth = date_part.wMonth;
+        range.end.wDay = date_part.wDay;
+    }
+    if (m_endTimePicker != nullptr)
+    {
+        DateTime_GetSystemtime(m_endTimePicker, &time_part);
+        range.end.wHour = time_part.wHour;
+        range.end.wMinute = time_part.wMinute;
+    }
+    range.start.wSecond = 0;
+    range.start.wMilliseconds = 0;
+    range.end.wSecond = 0;
+    range.end.wMilliseconds = 0;
+    return range;
 }
 
 CHistoryTrafficStore::DisplayLanguage CTrafficDetailWindow::GetSelectedLanguage() const
@@ -639,15 +714,26 @@ LRESULT CTrafficDetailWindow::HandleMessage(HWND hwnd, UINT message, WPARAM w_pa
         m_pauseRefreshButton = CreateWindowW(L"BUTTON", L"暂停刷新界面", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
             730, 10, 160, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPauseRefreshButtonId)), GetModuleHandleW(nullptr), nullptr);
 
-        m_periodLabel = CreateWindowW(L"STATIC", L"统计范围:", WS_CHILD,
-            520, 14, 80, 20, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPeriodLabelId)), GetModuleHandleW(nullptr), nullptr);
+        m_startLabel = CreateWindowW(L"STATIC", L"Start:", WS_CHILD | WS_VISIBLE,
+            520, 14, kRangeLabelWidth, 20, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStartLabelId)), GetModuleHandleW(nullptr), nullptr);
+        m_startDatePicker = CreateWindowExW(0, DATETIMEPICK_CLASSW, L"", WS_CHILD | WS_VISIBLE | DTS_SHORTDATECENTURYFORMAT,
+            562, 10, kRangeDateWidth, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStartDatePickerId)), GetModuleHandleW(nullptr), nullptr);
+        m_startTimePicker = CreateWindowExW(0, DATETIMEPICK_CLASSW, L"", WS_CHILD | WS_VISIBLE | DTS_TIMEFORMAT | DTS_UPDOWN,
+            562 + kRangeDateWidth + 8, 10, kRangeTimeWidth, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStartTimePickerId)), GetModuleHandleW(nullptr), nullptr);
 
-        m_periodCombo = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL,
-            610, 10, 110, 200, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPeriodComboId)), GetModuleHandleW(nullptr), nullptr);
-        ComboBox_AddString(m_periodCombo, L"日");
-        ComboBox_AddString(m_periodCombo, L"月");
-        ComboBox_AddString(m_periodCombo, L"年");
-        ComboBox_SetCurSel(m_periodCombo, static_cast<int>(m_plugin.GetPreferredPeriodMode()));
+        m_endLabel = CreateWindowW(L"STATIC", L"End:", WS_CHILD | WS_VISIBLE,
+            720, 14, kRangeLabelWidth, 20, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEndLabelId)), GetModuleHandleW(nullptr), nullptr);
+        m_endDatePicker = CreateWindowExW(0, DATETIMEPICK_CLASSW, L"", WS_CHILD | WS_VISIBLE | DTS_SHORTDATECENTURYFORMAT,
+            760, 10, kRangeDateWidth, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEndDatePickerId)), GetModuleHandleW(nullptr), nullptr);
+        m_endTimePicker = CreateWindowExW(0, DATETIMEPICK_CLASSW, L"", WS_CHILD | WS_VISIBLE | DTS_TIMEFORMAT | DTS_UPDOWN,
+            760 + kRangeDateWidth + 8, 10, kRangeTimeWidth, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEndTimePickerId)), GetModuleHandleW(nullptr), nullptr);
+
+        const auto preferred_range = m_plugin.GetPreferredRange();
+        DateTime_SetSystemtime(m_startDatePicker, GDT_VALID, &preferred_range.start);
+        DateTime_SetSystemtime(m_startTimePicker, GDT_VALID, &preferred_range.start);
+        DateTime_SetSystemtime(m_endDatePicker, GDT_VALID, &preferred_range.end);
+        DateTime_SetSystemtime(m_endTimePicker, GDT_VALID, &preferred_range.end);
+        ApplyRangeControls();
 
         m_list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
@@ -665,8 +751,12 @@ LRESULT CTrafficDetailWindow::HandleMessage(HWND hwnd, UINT message, WPARAM w_pa
         SendMessageW(m_languageLabel, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
         SendMessageW(m_languageCombo, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
         SendMessageW(m_pauseRefreshButton, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-        SendMessageW(m_periodLabel, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-        SendMessageW(m_periodCombo, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        SendMessageW(m_startLabel, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        SendMessageW(m_startDatePicker, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        SendMessageW(m_startTimePicker, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        SendMessageW(m_endLabel, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        SendMessageW(m_endDatePicker, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        SendMessageW(m_endTimePicker, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
         SendMessageW(m_list, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
         SendMessageW(m_summary, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
 
@@ -680,8 +770,11 @@ LRESULT CTrafficDetailWindow::HandleMessage(HWND hwnd, UINT message, WPARAM w_pa
     case WM_TIMER:
         if (w_param == kRefreshTimerId && !m_refreshPaused)
         {
-            if ((m_periodCombo != nullptr && SendMessageW(m_periodCombo, CB_GETDROPPEDSTATE, 0, 0) != 0) ||
-                (m_languageCombo != nullptr && SendMessageW(m_languageCombo, CB_GETDROPPEDSTATE, 0, 0) != 0))
+            if ((m_languageCombo != nullptr && SendMessageW(m_languageCombo, CB_GETDROPPEDSTATE, 0, 0) != 0) ||
+                GetFocus() == m_startDatePicker ||
+                GetFocus() == m_startTimePicker ||
+                GetFocus() == m_endDatePicker ||
+                GetFocus() == m_endTimePicker)
             {
                 return 0;
             }
@@ -706,14 +799,20 @@ LRESULT CTrafficDetailWindow::HandleMessage(HWND hwnd, UINT message, WPARAM w_pa
             RefreshView();
             return 0;
         }
-        if (LOWORD(w_param) == kPeriodComboId && HIWORD(w_param) == CBN_SELCHANGE)
-        {
-            m_plugin.SetPreferredPeriodMode(GetSelectedPeriodMode());
-            RefreshView();
-            return 0;
-        }
         break;
     case WM_NOTIFY:
+        if (reinterpret_cast<NMHDR*>(l_param)->idFrom == kStartDatePickerId ||
+            reinterpret_cast<NMHDR*>(l_param)->idFrom == kStartTimePickerId ||
+            reinterpret_cast<NMHDR*>(l_param)->idFrom == kEndDatePickerId ||
+            reinterpret_cast<NMHDR*>(l_param)->idFrom == kEndTimePickerId)
+        {
+            if (reinterpret_cast<NMHDR*>(l_param)->code == DTN_DATETIMECHANGE)
+            {
+                m_plugin.SetPreferredRange(GetSelectedRange());
+                RefreshView();
+                return 0;
+            }
+        }
         if (reinterpret_cast<NMHDR*>(l_param)->hwndFrom == ListView_GetHeader(m_list) &&
             reinterpret_cast<NMHDR*>(l_param)->code == HDN_ENDTRACKW)
         {
@@ -740,8 +839,12 @@ LRESULT CTrafficDetailWindow::HandleMessage(HWND hwnd, UINT message, WPARAM w_pa
         m_languageLabel = nullptr;
         m_languageCombo = nullptr;
         m_pauseRefreshButton = nullptr;
-        m_periodLabel = nullptr;
-        m_periodCombo = nullptr;
+        m_startLabel = nullptr;
+        m_startDatePicker = nullptr;
+        m_startTimePicker = nullptr;
+        m_endLabel = nullptr;
+        m_endDatePicker = nullptr;
+        m_endTimePicker = nullptr;
         m_summary = nullptr;
         return 0;
     default:
@@ -773,4 +876,3 @@ LRESULT CALLBACK CTrafficDetailWindow::StaticWndProc(HWND hwnd, UINT message, WP
 
     return DefWindowProcW(hwnd, message, w_param, l_param);
 }
-

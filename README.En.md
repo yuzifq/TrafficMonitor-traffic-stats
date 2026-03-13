@@ -10,7 +10,7 @@ It is not part of the official TrafficMonitor project.
 ## Features
 
 - Real-time upload and download statistics for each process
-- Historical traffic totals by **day**, **month**, and **year**
+- Supports cumulative historical traffic statistics by time period
 - Detailed traffic window with process icons
 - English / Chinese interface support
 - Preference persistence across restarts

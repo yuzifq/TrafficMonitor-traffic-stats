@@ -45,10 +45,11 @@ private:
     int AddIconToImageList(HICON icon);
     HICON LoadSmallExeIcon(const std::wstring& exe_path) const;
     HICON LoadDefaultExeIcon() const;
+    void ApplyRangeControls();
     void ResizeChildren(int width, int height);
     void ClearList();
     void SetListText(int row, int column, const wchar_t* text);
-    CHistoryTrafficStore::PeriodMode GetSelectedPeriodMode() const;
+    CHistoryTrafficStore::DateTimeRange GetSelectedRange() const;
     CHistoryTrafficStore::DisplayLanguage GetSelectedLanguage() const;
     LRESULT HandleMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
 
@@ -62,8 +63,12 @@ private:
     HWND m_languageLabel;
     HWND m_languageCombo;
     HWND m_pauseRefreshButton;
-    HWND m_periodLabel;
-    HWND m_periodCombo;
+    HWND m_startLabel;
+    HWND m_startDatePicker;
+    HWND m_startTimePicker;
+    HWND m_endLabel;
+    HWND m_endDatePicker;
+    HWND m_endTimePicker;
     HWND m_summary;
     HIMAGELIST m_smallImageList;
     ViewMode m_viewMode;

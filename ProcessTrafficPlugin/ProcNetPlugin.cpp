@@ -96,7 +96,7 @@ const wchar_t* CProcNetPlugin::GetInfo(PluginInfoIndex index)
     case TMI_COPYRIGHT:
         return english ? L"Copyright (c) 2026 yuzifq" : L"Copyright (c) 2026 yuzifq";
     case TMI_VERSION:
-        return L"0.1.0";
+        return L"0.1.1";
     case TMI_URL:
         return L"https://github.com/zhongyang219/TrafficMonitor";
     case TMI_API_VERSION:
@@ -210,10 +210,10 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildAllApps() cons
     return result;
 }
 
-std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(CHistoryTrafficStore::PeriodMode period_mode) const
+std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(const CHistoryTrafficStore::DateTimeRange& range) const
 {
     std::vector<AppTrafficEntry> result;
-    const auto history_apps = m_historyStore.GetPeriodAppTotals(period_mode);
+    const auto history_apps = m_historyStore.GetRangeAppTotals(range);
     result.reserve(history_apps.size());
     for (const auto& app : history_apps)
     {
@@ -227,32 +227,22 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(CH
     return result;
 }
 
-std::wstring CProcNetPlugin::BuildTotalsText(CHistoryTrafficStore::PeriodMode period_mode, CHistoryTrafficStore::DisplayLanguage language) const
+std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range, CHistoryTrafficStore::DisplayLanguage language) const
 {
-    const auto selected = m_historyStore.GetPeriodTotal(period_mode);
+    const auto selected = m_historyStore.GetRangeTotal(range);
     const auto all = m_historyStore.GetAllTimeTotal();
     const auto selected_total = selected.rxBytes + selected.txBytes;
     const auto all_total = all.rxBytes + all.txBytes;
 
     const bool english = language == CHistoryTrafficStore::DisplayLanguage::English;
-    std::wstring period_name = english ? L"Today" : L"今日";
-    if (period_mode == CHistoryTrafficStore::PeriodMode::Month)
-    {
-        period_name = english ? L"This Month" : L"本月";
-    }
-    else if (period_mode == CHistoryTrafficStore::PeriodMode::Year)
-    {
-        period_name = english ? L"This Year" : L"本年";
-    }
-
     std::wstring text;
     if (english)
     {
-        text = period_name + L" Download: ";
+        text = L"Range Download: ";
         text += Utils::FormatBytes(selected.rxBytes);
-        text += L"\r\n" + period_name + L" Upload: ";
+        text += L"\r\nRange Upload: ";
         text += Utils::FormatBytes(selected.txBytes);
-        text += L"\r\n" + period_name + L" Total: ";
+        text += L"\r\nRange Total: ";
         text += Utils::FormatBytes(selected_total);
 
         text += L"\r\n\r\nAll-Time Download: ";
@@ -267,11 +257,11 @@ std::wstring CProcNetPlugin::BuildTotalsText(CHistoryTrafficStore::PeriodMode pe
     }
     else
     {
-        text = period_name + L"下载: ";
+        text = L"区间下载: ";
         text += Utils::FormatBytes(selected.rxBytes);
-        text += L"\r\n" + period_name + L"上传: ";
+        text += L"\r\n区间上传: ";
         text += Utils::FormatBytes(selected.txBytes);
-        text += L"\r\n" + period_name + L"总流量: ";
+        text += L"\r\n区间总流量: ";
         text += Utils::FormatBytes(selected_total);
 
         text += L"\r\n\r\n历史累计下载: ";
@@ -287,14 +277,14 @@ std::wstring CProcNetPlugin::BuildTotalsText(CHistoryTrafficStore::PeriodMode pe
     return text;
 }
 
-CHistoryTrafficStore::PeriodMode CProcNetPlugin::GetPreferredPeriodMode() const
+CHistoryTrafficStore::DateTimeRange CProcNetPlugin::GetPreferredRange() const
 {
-    return m_historyStore.GetPreferredPeriodMode();
+    return m_historyStore.GetPreferredRange();
 }
 
-void CProcNetPlugin::SetPreferredPeriodMode(CHistoryTrafficStore::PeriodMode period_mode)
+void CProcNetPlugin::SetPreferredRange(const CHistoryTrafficStore::DateTimeRange& range)
 {
-    m_historyStore.SetPreferredPeriodMode(period_mode);
+    m_historyStore.SetPreferredRange(range);
 }
 
 CHistoryTrafficStore::DisplayLanguage CProcNetPlugin::GetPreferredLanguage() const
