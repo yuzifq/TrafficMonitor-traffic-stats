@@ -63,7 +63,6 @@ msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
 <img width="710" height="462" alt="image" src="https://github.com/user-attachments/assets/e9ece008-b293-482a-adcd-f8b49aafc6fc" />
 
 
-<img width="1000" height="620" alt="image" src="https://github.com/user-attachments/assets/01beaad3-8676-4f5d-831c-ed305c14756e" />
+<img width="1180" height="620" alt="Image" src="https://github.com/user-attachments/assets/9f0064ad-1e93-422f-a93c-a99d698e3147" />
 
-<img width="1000" height="620" alt="image" src="https://github.com/user-attachments/assets/ea5c4ae7-a15b-4c94-856c-0c6a497706a0" />
-
+<img width="1180" height="620" alt="Image" src="https://github.com/user-attachments/assets/b95444c7-13e4-438f-869a-1694db9184de" />
