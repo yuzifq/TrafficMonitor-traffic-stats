@@ -85,5 +85,6 @@ private:
     mutable std::mutex m_processCacheMutex;
     mutable ULONGLONG m_processCacheTick;
     mutable std::vector<CProcessFinder::ProcessEntry> m_cachedProcesses;
+    mutable std::unordered_map<DWORD, CProcessFinder::ProcessEntry> m_knownProcessesByPid;
     std::unique_ptr<CTrafficDetailWindow> m_detailWindow;
 };

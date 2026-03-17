@@ -59,6 +59,11 @@ void WriteLastSeenEntry(std::wofstream& output, const std::wstring& app_name, co
            << amount.rxBytes << L'\t'
            << amount.txBytes << L'\n';
 }
+
+void WritePathEntry(std::wofstream& output, const std::wstring& app_name, const std::wstring& exe_path)
+{
+    output << L"path\t" << app_name << L'\t' << exe_path << L'\n';
+}
 }
 
 void CHistoryTrafficStore::Initialize(const std::wstring& base_dir)
@@ -99,6 +104,11 @@ void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
             m_dirty = true;
         }
 
+        if (!app.exePath.empty())
+        {
+            m_pathByApp[app.appName] = app.exePath;
+        }
+
         m_lastSeenTotals[app.appName] = current;
     }
 
@@ -135,6 +145,11 @@ std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeA
     {
         AppTotalEntry item{};
         item.appName = entry.first;
+        const auto path_it = m_pathByApp.find(entry.first);
+        if (path_it != m_pathByApp.end())
+        {
+            item.exePath = path_it->second;
+        }
         item.rxTotalBytes = entry.second.rxBytes;
         item.txTotalBytes = entry.second.txBytes;
         result.push_back(item);
@@ -224,6 +239,7 @@ void CHistoryTrafficStore::EnsureLoaded()
 void CHistoryTrafficStore::Load()
 {
     m_bucketByApp.clear();
+    m_pathByApp.clear();
     if (m_filePath.empty() || !std::filesystem::exists(m_filePath))
     {
         return;
@@ -275,6 +291,7 @@ void CHistoryTrafficStore::Save() const
 void CHistoryTrafficStore::LoadState()
 {
     m_lastSeenTotals.clear();
+    m_pathByApp.clear();
     m_preferredRange = GetDefaultRange();
     m_preferredLanguage = DisplayLanguage::English;
 
@@ -328,6 +345,17 @@ void CHistoryTrafficStore::LoadState()
             continue;
         }
 
+        if (type == L"path")
+        {
+            std::wstring app_name;
+            std::wstring exe_path;
+            if (ReadTabField(stream, app_name) && ReadTabField(stream, exe_path) && !app_name.empty() && !exe_path.empty())
+            {
+                m_pathByApp[app_name] = exe_path;
+            }
+            continue;
+        }
+
         if (type != L"last")
         {
             continue;
@@ -361,6 +389,13 @@ void CHistoryTrafficStore::SaveState() const
     WriteStateLine(output, L"language", static_cast<int>(m_preferredLanguage));
     WriteStateLine(output, L"range_start", FormatMinuteTime(normalized.start));
     WriteStateLine(output, L"range_end", FormatMinuteTime(normalized.end));
+    for (const auto& entry : m_pathByApp)
+    {
+        if (!entry.first.empty() && !entry.second.empty())
+        {
+            WritePathEntry(output, entry.first, entry.second);
+        }
+    }
     for (const auto& entry : m_lastSeenTotals)
     {
         WriteLastSeenEntry(output, entry.first, entry.second);

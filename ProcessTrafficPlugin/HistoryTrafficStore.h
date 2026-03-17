@@ -25,6 +25,7 @@ public:
     struct AppTotalEntry
     {
         std::wstring appName;
+        std::wstring exePath;
         std::uint64_t rxTotalBytes{};
         std::uint64_t txTotalBytes{};
     };
@@ -71,6 +72,7 @@ private:
     bool m_loaded{ false };
     mutable bool m_dirty{ false };
     std::unordered_map<std::wstring, BucketAppMap> m_bucketByApp;
+    std::unordered_map<std::wstring, std::wstring> m_pathByApp;
     std::unordered_map<std::wstring, TrafficAmount> m_lastSeenTotals;
     DateTimeRange m_preferredRange{};
     DisplayLanguage m_preferredLanguage{ DisplayLanguage::English };

@@ -87,6 +87,7 @@ private:
     HWND m_endLabel;
     HWND m_endDatePicker;
     HWND m_endTimePicker;
+    HWND m_hidePidCheck;
     HWND m_dayRangeButton;
     HWND m_monthRangeButton;
     HWND m_yearRangeButton;
@@ -96,6 +97,7 @@ private:
     ViewMode m_lastBuiltView;
     CHistoryTrafficStore::DisplayLanguage m_lastBuiltLanguage;
     bool m_refreshPaused;
+    bool m_hideAnonymousPidItems;
     std::vector<int> m_realtimeColumnWidths;
     std::vector<int> m_totalColumnWidths;
     std::unordered_map<std::wstring, int> m_iconIndexByKey;

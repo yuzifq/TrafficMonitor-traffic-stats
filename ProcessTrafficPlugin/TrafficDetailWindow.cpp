@@ -30,6 +30,7 @@ constexpr int kStartTimePickerId = 1011;
 constexpr int kEndLabelId = 1009;
 constexpr int kEndDatePickerId = 1010;
 constexpr int kEndTimePickerId = 1012;
+constexpr int kHidePidCheckId = 1016;
 constexpr int kDayRangeButtonId = 1013;
 constexpr int kMonthRangeButtonId = 1014;
 constexpr int kYearRangeButtonId = 1015;
@@ -53,6 +54,7 @@ constexpr int kDateTimePickerHeight = 28;
 constexpr int kLabelHeight = 20;
 constexpr int kComboDropHeight = 200;
 constexpr int kListInitialHeight = 500;
+constexpr int kCheckBoxHeight = 22;
 
 struct LocalizedText
 {
@@ -111,12 +113,10 @@ const wchar_t* GetLocalizedText(bool english, const LocalizedText& text)
 std::vector<std::wstring> BuildRealtimeRow(const CProcNetPlugin::AppTrafficEntry& app)
 {
     std::vector<std::wstring> columns;
-    columns.reserve(5);
+    columns.reserve(3);
     columns.push_back(NormalizeDisplayName(app.exeName));
     columns.push_back(Utils::FormatRate(app.rxBytesPerSec));
     columns.push_back(Utils::FormatRate(app.txBytesPerSec));
-    columns.push_back(Utils::FormatBytes(app.rxTotalBytes));
-    columns.push_back(Utils::FormatBytes(app.txTotalBytes));
     return columns;
 }
 
@@ -224,13 +224,28 @@ bool IsRangeControlId(UINT_PTR control_id)
         control_id == kEndTimePickerId;
 }
 
-const std::array<ColumnDefinition, 6> kRealtimeColumns{ {
+bool IsAnonymousPidName(const std::wstring& name)
+{
+    if (name.size() <= 3 || name.rfind(L"PID", 0) != 0)
+    {
+        return false;
+    }
+
+    for (size_t i = 3; i < name.size(); ++i)
+    {
+        if (!std::iswdigit(name[i]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+const std::array<ColumnDefinition, 4> kRealtimeColumns{ {
     { { L" ", L" " }, LVCFMT_CENTER },
     { { L"Program", L"程序" }, LVCFMT_LEFT },
     { { L"Download", L"实时下载" }, LVCFMT_LEFT },
     { { L"Upload", L"实时上传" }, LVCFMT_LEFT },
-    { { L"Total Down", L"累计下载" }, LVCFMT_LEFT },
-    { { L"Total Up", L"累计上传" }, LVCFMT_LEFT },
 } };
 
 const std::array<ColumnDefinition, 5> kTotalColumns{ {
@@ -277,6 +292,7 @@ CTrafficDetailWindow::CTrafficDetailWindow(CProcNetPlugin& plugin)
       m_endLabel(nullptr),
       m_endDatePicker(nullptr),
       m_endTimePicker(nullptr),
+      m_hidePidCheck(nullptr),
       m_dayRangeButton(nullptr),
       m_monthRangeButton(nullptr),
       m_yearRangeButton(nullptr),
@@ -286,7 +302,8 @@ CTrafficDetailWindow::CTrafficDetailWindow(CProcNetPlugin& plugin)
       m_lastBuiltView(ViewMode::Realtime),
       m_lastBuiltLanguage(CHistoryTrafficStore::DisplayLanguage::English),
       m_refreshPaused(false),
-      m_realtimeColumnWidths{ 26, 214, 130, 130, 130, 130 },
+      m_hideAnonymousPidItems(true),
+      m_realtimeColumnWidths{ 26, 474, 170, 170 },
       m_totalColumnWidths{ 26, 234, 150, 150, 150 },
       m_defaultIconIndex(-1)
 {
@@ -409,6 +426,10 @@ void CTrafficDetailWindow::CreateChildControls(HWND hwnd)
         end_left, kMargin + 4, kRangeLabelWidth, kLabelHeight, hwnd, kEndLabelId);
     m_endDatePicker = CreateDateTimePickerControl(hwnd, kEndDatePickerId, DTS_SHORTDATECENTURYFORMAT, end_picker_left, kMargin, kRangeDateWidth);
     m_endTimePicker = CreateDateTimePickerControl(hwnd, kEndTimePickerId, DTS_TIMEFORMAT | DTS_UPDOWN, end_picker_left + kRangeDateWidth + 8, kMargin, kRangeTimeWidth);
+    m_hidePidCheck = CreateChildWindow(
+        L"BUTTON", L"Hide anonymous PID items", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        end_left, kMargin + kRangeRowSpacing * 2, 220, kCheckBoxHeight, hwnd, kHidePidCheckId);
+    Button_SetCheck(m_hidePidCheck, BST_CHECKED);
 
     m_dayRangeButton = CreateChildWindow(
         L"BUTTON", L"日", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -443,7 +464,7 @@ void CTrafficDetailWindow::SetAllControlFonts() const
     const HWND controls[] = {
         m_toggleViewButton, m_languageLabel, m_languageCombo, m_pauseRefreshButton,
         m_startLabel, m_startDatePicker, m_startTimePicker, m_endLabel, m_endDatePicker,
-        m_endTimePicker, m_dayRangeButton, m_monthRangeButton, m_yearRangeButton, m_list, m_summary
+        m_endTimePicker, m_hidePidCheck, m_dayRangeButton, m_monthRangeButton, m_yearRangeButton, m_list, m_summary
     };
 
     for (HWND control : controls)
@@ -533,6 +554,7 @@ void CTrafficDetailWindow::ApplyLanguageTexts()
     SetWindowTextIfPresent(m_languageLabel, GetLocalizedText(language, { L"Language:", L"语言:" }));
     SetWindowTextIfPresent(m_startLabel, GetLocalizedText(language, { L"Start:", L"开始时间:" }));
     SetWindowTextIfPresent(m_endLabel, GetLocalizedText(language, { L"End:", L"结束时间:" }));
+    SetWindowTextIfPresent(m_hidePidCheck, GetLocalizedText(language, { L"Hide anonymous PID items", L"隐藏匿名 PID 项" }));
     SetWindowTextIfPresent(m_dayRangeButton, GetLocalizedText(language, { L"Day", L"日" }));
     SetWindowTextIfPresent(m_monthRangeButton, GetLocalizedText(language, { L"Month", L"月" }));
     SetWindowTextIfPresent(m_yearRangeButton, GetLocalizedText(language, { L"Year", L"年" }));
@@ -603,7 +625,7 @@ void CTrafficDetailWindow::ShowTotalViewControls(bool show)
     const int command = show ? SW_SHOW : SW_HIDE;
     const HWND controls[] = {
         m_startLabel, m_startDatePicker, m_startTimePicker, m_endLabel,
-        m_endDatePicker, m_endTimePicker, m_dayRangeButton, m_monthRangeButton, m_yearRangeButton
+        m_endDatePicker, m_endTimePicker, m_hidePidCheck, m_dayRangeButton, m_monthRangeButton, m_yearRangeButton
     };
 
     for (HWND control : controls)
@@ -756,6 +778,12 @@ void CTrafficDetailWindow::FillRealtimeView()
 void CTrafficDetailWindow::FillTotalView()
 {
     auto apps = m_plugin.BuildHistoryApps(GetSelectedRange());
+    if (m_hideAnonymousPidItems)
+    {
+        apps.erase(std::remove_if(apps.begin(), apps.end(), [](const CProcNetPlugin::AppTrafficEntry& app) {
+            return IsAnonymousPidName(app.exeName);
+        }), apps.end());
+    }
     std::sort(apps.begin(), apps.end(), [](const CProcNetPlugin::AppTrafficEntry& left, const CProcNetPlugin::AppTrafficEntry& right) {
         return (left.rxTotalBytes + left.txTotalBytes) > (right.rxTotalBytes + right.txTotalBytes);
     });
@@ -933,6 +961,7 @@ void CTrafficDetailWindow::LayoutBottomControls(int width, int height)
     MoveControlIfPresent(m_endLabel, range_block_left, range_block_top + kRangeRowSpacing + 4, kRangeLabelWidth, 20);
     MoveControlIfPresent(m_endDatePicker, picker_left, range_block_top + kRangeRowSpacing, kRangeDateWidth, 28);
     MoveControlIfPresent(m_endTimePicker, picker_left + kRangeDateWidth + 8, range_block_top + kRangeRowSpacing, kRangeTimeWidth, 28);
+    MoveControlIfPresent(m_hidePidCheck, range_block_left, range_block_top + kRangeRowSpacing * 2 + 2, 220, kCheckBoxHeight);
     MoveControlIfPresent(m_dayRangeButton, quick_button_left, range_block_top, kQuickButtonWidth, kQuickButtonHeight);
     MoveControlIfPresent(m_monthRangeButton, quick_button_left, range_block_top + kRangeRowSpacing, kQuickButtonWidth, kQuickButtonHeight);
     MoveControlIfPresent(m_yearRangeButton, quick_button_left, range_block_top + kRangeRowSpacing * 2, kQuickButtonWidth, kQuickButtonHeight);
@@ -1011,6 +1040,12 @@ bool CTrafficDetailWindow::HandleCommand(WORD command_id, WORD notify_code)
         RefreshView();
         return true;
     }
+    if (command_id == kHidePidCheckId)
+    {
+        m_hideAnonymousPidItems = (m_hidePidCheck != nullptr && Button_GetCheck(m_hidePidCheck) == BST_CHECKED);
+        RefreshView();
+        return true;
+    }
 
     return false;
 }
@@ -1086,7 +1121,8 @@ void CTrafficDetailWindow::ResetControlHandles()
 {
     m_hwnd = m_list = m_toggleViewButton = m_languageLabel = m_languageCombo = nullptr;
     m_pauseRefreshButton = m_startLabel = m_startDatePicker = m_startTimePicker = nullptr;
-    m_endLabel = m_endDatePicker = m_endTimePicker = m_dayRangeButton = nullptr;
+    m_endLabel = m_endDatePicker = m_endTimePicker = m_hidePidCheck = nullptr;
+    m_dayRangeButton = nullptr;
     m_monthRangeButton = m_yearRangeButton = m_summary = nullptr;
 }
 

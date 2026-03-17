@@ -118,6 +118,13 @@ std::vector<CProcessFinder::ProcessEntry> CProcNetPlugin::GetCachedProcesses() c
     if (m_cachedProcesses.empty() || now - m_processCacheTick >= 3000)
     {
         m_cachedProcesses = CProcessFinder::EnumerateProcesses();
+        for (const auto& process : m_cachedProcesses)
+        {
+            if (!process.exeName.empty())
+            {
+                m_knownProcessesByPid[process.pid] = process;
+            }
+        }
         m_processCacheTick = now;
     }
     return m_cachedProcesses;
@@ -174,7 +181,7 @@ const wchar_t* CProcNetPlugin::GetInfoText(PluginInfoIndex index, CHistoryTraffi
     case TMI_COPYRIGHT:
         return L"Copyright (c) 2026 yuzifq";
     case TMI_VERSION:
-        return L"0.1.2";
+        return L"0.1.3";
     case TMI_URL:
         return L"https://github.com/zhongyang219/TrafficMonitor";
     case TMI_API_VERSION:
@@ -249,11 +256,40 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildAllApps() cons
     for (const auto& entry : snapshot)
     {
         const auto it = name_by_pid.find(entry.first);
-        std::wstring exe_name = it != name_by_pid.end() ? it->second : (L"PID" + std::to_wstring(entry.first));
+        std::wstring exe_name;
+        std::wstring exe_path;
+        if (it != name_by_pid.end())
+        {
+            exe_name = it->second;
+            const auto path_it = path_by_name.find(exe_name);
+            if (path_it != path_by_name.end())
+            {
+                exe_path = path_it->second;
+            }
+        }
+        else
+        {
+            std::lock_guard<std::mutex> lock(m_processCacheMutex);
+            const auto known_it = m_knownProcessesByPid.find(entry.first);
+            if (known_it != m_knownProcessesByPid.end())
+            {
+                exe_name = known_it->second.exeName;
+                exe_path = known_it->second.exePath;
+            }
+            else
+            {
+                exe_name = L"PID" + std::to_wstring(entry.first);
+            }
+        }
+
         auto& app = apps_by_name[exe_name];
         if (app.exeName.empty())
         {
             app = MakeAppEntry(exe_name, path_by_name);
+            if (app.exePath.empty())
+            {
+                app.exePath = exe_path;
+            }
         }
         app.rxBytesPerSec += entry.second.rxBytesPerSec;
         app.txBytesPerSec += entry.second.txBytesPerSec;
@@ -284,13 +320,13 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(co
 {
     std::vector<AppTrafficEntry> result;
     const auto history_apps = m_historyStore.GetRangeAppTotals(range);
-    const auto processes = GetCachedProcesses();
-    const auto path_by_name = BuildPathMapByName(processes);
 
     result.reserve(history_apps.size());
     for (const auto& app : history_apps)
     {
-        AppTrafficEntry entry = MakeAppEntry(app.appName, path_by_name);
+        AppTrafficEntry entry{};
+        entry.exeName = app.appName;
+        entry.exePath = app.exePath;
         entry.rxTotalBytes = app.rxTotalBytes;
         entry.txTotalBytes = app.txTotalBytes;
         result.push_back(std::move(entry));
@@ -408,6 +444,7 @@ void CProcNetPlugin::UpdateHistory(const std::vector<AppTrafficEntry>& apps)
     {
         CHistoryTrafficStore::AppTotalEntry entry{};
         entry.appName = app.exeName;
+        entry.exePath = app.exePath;
         entry.rxTotalBytes = app.rxTotalBytes;
         entry.txTotalBytes = app.txTotalBytes;
         history_apps.push_back(std::move(entry));
