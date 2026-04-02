@@ -8,8 +8,7 @@
 #include <vector>
 
 #include "HistoryTrafficStore.h"
-
-class CProcNetPlugin;
+#include "ProcNetPlugin.h"
 
 class CTrafficDetailWindow
 {
@@ -24,6 +23,13 @@ private:
         Total
     };
 
+    enum class SortDirection
+    {
+        None,
+        Ascending,
+        Descending
+    };
+
     void EnsureWindowClassRegistered();
     void CreateOrActivate(HWND parent);
     void EnsureCommonControlsInitialized();
@@ -36,11 +42,13 @@ private:
     void ApplyQuickRange(int button_id);
     void ApplyCurrentRangeToControls();
     void ShowTotalViewControls(bool show);
+    void ShowPauseRefreshButton(bool show);
     void UpdateViewSpecificControls();
     void UpdateWindowTitle();
     void UpdateButtonText();
     void EnsureColumnsForCurrentView();
     void RebuildColumnsForView(ViewMode view_mode);
+    std::wstring GetColumnTitleText(int column_index, const wchar_t* base_title) const;
     void SaveCurrentColumnWidths();
     void FillRealtimeView();
     void FillTotalView();
@@ -59,6 +67,9 @@ private:
     void ClearList();
     void SetListText(int row, int column, const wchar_t* text);
     void SetWindowTextIfPresent(HWND control, const wchar_t* text) const;
+    void UpdateSortState(int clicked_column);
+    void SortApps(std::vector<CProcNetPlugin::AppTrafficEntry>& apps) const;
+    static int CompareText(const std::wstring& left, const std::wstring& right);
     bool IsInteractiveControlActive() const;
     CHistoryTrafficStore::DateTimeRange GetSelectedRange() const;
     CHistoryTrafficStore::DisplayLanguage GetSelectedLanguage() const;
@@ -98,6 +109,8 @@ private:
     CHistoryTrafficStore::DisplayLanguage m_lastBuiltLanguage;
     bool m_refreshPaused;
     bool m_hideAnonymousPidItems;
+    int m_sortColumn;
+    SortDirection m_sortDirection;
     std::vector<int> m_realtimeColumnWidths;
     std::vector<int> m_totalColumnWidths;
     std::unordered_map<std::wstring, int> m_iconIndexByKey;

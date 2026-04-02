@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cwctype>
+#include <cwchar>
 #include <vector>
 
 #pragma comment(lib, "comctl32.lib")
@@ -303,7 +304,9 @@ CTrafficDetailWindow::CTrafficDetailWindow(CProcNetPlugin& plugin)
       m_lastBuiltLanguage(CHistoryTrafficStore::DisplayLanguage::English),
       m_refreshPaused(false),
       m_hideAnonymousPidItems(true),
-      m_realtimeColumnWidths{ 26, 474, 170, 170 },
+      m_sortColumn(-1),
+      m_sortDirection(SortDirection::None),
+      m_realtimeColumnWidths{ 26, 315, 250, 250 },
       m_totalColumnWidths{ 26, 234, 150, 150, 150 },
       m_defaultIconIndex(-1)
 {
@@ -539,6 +542,8 @@ void CTrafficDetailWindow::ToggleView()
 {
     SaveCurrentColumnWidths();
     m_viewMode = (m_viewMode == ViewMode::Realtime) ? ViewMode::Total : ViewMode::Realtime;
+    m_sortColumn = -1;
+    m_sortDirection = SortDirection::None;
     RefreshView();
 }
 
@@ -561,11 +566,11 @@ void CTrafficDetailWindow::ApplyLanguageTexts()
 
     if (m_languageCombo != nullptr)
     {
-        const int current = ComboBox_GetCurSel(m_languageCombo);
-        ComboBox_ResetContent(m_languageCombo);
-        ComboBox_AddString(m_languageCombo, L"English");
-        ComboBox_AddString(m_languageCombo, L"中文");
-        ComboBox_SetCurSel(m_languageCombo, current >= 0 ? current : 0);
+        const int selected = static_cast<int>(language);
+        if (ComboBox_GetCurSel(m_languageCombo) != selected)
+        {
+            ComboBox_SetCurSel(m_languageCombo, selected);
+        }
     }
 
     ApplyRangeControls();
@@ -637,6 +642,14 @@ void CTrafficDetailWindow::ShowTotalViewControls(bool show)
     }
 }
 
+void CTrafficDetailWindow::ShowPauseRefreshButton(bool show)
+{
+    if (m_pauseRefreshButton != nullptr)
+    {
+        ShowWindow(m_pauseRefreshButton, show ? SW_SHOW : SW_HIDE);
+    }
+}
+
 void CTrafficDetailWindow::UpdateViewSpecificControls()
 {
     if (m_viewMode == ViewMode::Realtime)
@@ -648,6 +661,7 @@ void CTrafficDetailWindow::UpdateViewSpecificControls()
             ShowWindow(m_summary, SW_HIDE);
         }
         ShowTotalViewControls(false);
+        ShowPauseRefreshButton(true);
         return;
     }
 
@@ -658,6 +672,7 @@ void CTrafficDetailWindow::UpdateViewSpecificControls()
         ShowWindow(m_summary, SW_SHOW);
     }
     ShowTotalViewControls(true);
+    ShowPauseRefreshButton(false);
 }
 
 void CTrafficDetailWindow::UpdateWindowTitle()
@@ -719,11 +734,12 @@ void CTrafficDetailWindow::RebuildColumnsForView(ViewMode view_mode)
     {
         for (size_t i = 0; i < kRealtimeColumns.size(); ++i)
         {
+            const auto title = GetColumnTitleText(static_cast<int>(i), GetLocalizedText(language, kRealtimeColumns[i].title));
             AddColumn(
                 m_list,
                 static_cast<int>(i),
                 m_realtimeColumnWidths[i],
-                GetLocalizedText(language, kRealtimeColumns[i].title),
+                title.c_str(),
                 kRealtimeColumns[i].format);
         }
     }
@@ -731,14 +747,34 @@ void CTrafficDetailWindow::RebuildColumnsForView(ViewMode view_mode)
     {
         for (size_t i = 0; i < kTotalColumns.size(); ++i)
         {
+            const auto title = GetColumnTitleText(static_cast<int>(i), GetLocalizedText(language, kTotalColumns[i].title));
             AddColumn(
                 m_list,
                 static_cast<int>(i),
                 m_totalColumnWidths[i],
-                GetLocalizedText(language, kTotalColumns[i].title),
+                title.c_str(),
                 kTotalColumns[i].format);
         }
     }
+}
+
+std::wstring CTrafficDetailWindow::GetColumnTitleText(int column_index, const wchar_t* base_title) const
+{
+    std::wstring title = base_title != nullptr ? base_title : L"";
+    if (column_index <= 0 || m_sortColumn != column_index)
+    {
+        return title;
+    }
+
+    if (m_sortDirection == SortDirection::Ascending)
+    {
+        title += L" ↑";
+    }
+    else if (m_sortDirection == SortDirection::Descending)
+    {
+        title += L" ↓";
+    }
+    return title;
 }
 
 void CTrafficDetailWindow::SaveCurrentColumnWidths()
@@ -767,7 +803,8 @@ void CTrafficDetailWindow::SaveCurrentColumnWidths()
 
 void CTrafficDetailWindow::FillRealtimeView()
 {
-    const auto apps = m_plugin.BuildAllApps();
+    auto apps = m_plugin.BuildAllApps();
+    SortApps(apps);
     EnsureListItemCount(static_cast<int>(apps.size()));
     for (size_t i = 0; i < apps.size(); ++i)
     {
@@ -784,9 +821,7 @@ void CTrafficDetailWindow::FillTotalView()
             return IsAnonymousPidName(app.exeName);
         }), apps.end());
     }
-    std::sort(apps.begin(), apps.end(), [](const CProcNetPlugin::AppTrafficEntry& left, const CProcNetPlugin::AppTrafficEntry& right) {
-        return (left.rxTotalBytes + left.txTotalBytes) > (right.rxTotalBytes + right.txTotalBytes);
-    });
+    SortApps(apps);
 
     EnsureListItemCount(static_cast<int>(apps.size()));
     for (size_t i = 0; i < apps.size(); ++i)
@@ -933,6 +968,130 @@ void CTrafficDetailWindow::SetWindowTextIfPresent(HWND control, const wchar_t* t
     }
 }
 
+void CTrafficDetailWindow::UpdateSortState(int clicked_column)
+{
+    if (clicked_column <= 0)
+    {
+        return;
+    }
+
+    const bool text_column = clicked_column == 1;
+    const bool total_column_in_total_view = (m_viewMode == ViewMode::Total && clicked_column == 4);
+
+    if (m_sortColumn != clicked_column)
+    {
+        m_sortColumn = clicked_column;
+        if (text_column)
+        {
+            m_sortDirection = SortDirection::Ascending;
+        }
+        else if (total_column_in_total_view)
+        {
+            m_sortDirection = SortDirection::Ascending;
+        }
+        else
+        {
+            m_sortDirection = SortDirection::Descending;
+        }
+        return;
+    }
+
+    switch (m_sortDirection)
+    {
+    case SortDirection::None:
+        m_sortDirection = text_column ? SortDirection::Ascending : SortDirection::Descending;
+        break;
+    case SortDirection::Ascending:
+        if (text_column)
+        {
+            m_sortDirection = SortDirection::Descending;
+        }
+        else if (total_column_in_total_view)
+        {
+            m_sortDirection = SortDirection::None;
+            m_sortColumn = -1;
+        }
+        else
+        {
+            m_sortDirection = SortDirection::None;
+            m_sortColumn = -1;
+        }
+        break;
+    case SortDirection::Descending:
+        if (text_column)
+        {
+            m_sortDirection = SortDirection::None;
+            m_sortColumn = -1;
+        }
+        else
+        {
+            m_sortDirection = SortDirection::Ascending;
+        }
+        break;
+    }
+}
+
+void CTrafficDetailWindow::SortApps(std::vector<CProcNetPlugin::AppTrafficEntry>& apps) const
+{
+    if (m_sortDirection == SortDirection::None || m_sortColumn <= 0)
+    {
+        if (m_viewMode == ViewMode::Total)
+        {
+            std::sort(apps.begin(), apps.end(), [](const CProcNetPlugin::AppTrafficEntry& left, const CProcNetPlugin::AppTrafficEntry& right) {
+                return (left.rxTotalBytes + left.txTotalBytes) > (right.rxTotalBytes + right.txTotalBytes);
+            });
+        }
+        return;
+    }
+
+    const bool ascending = m_sortDirection == SortDirection::Ascending;
+    std::sort(apps.begin(), apps.end(), [this, ascending](const CProcNetPlugin::AppTrafficEntry& left, const CProcNetPlugin::AppTrafficEntry& right) {
+        int compare_result = 0;
+        if (m_sortColumn == 1)
+        {
+            compare_result = CompareText(NormalizeDisplayName(left.exeName), NormalizeDisplayName(right.exeName));
+        }
+        else if (m_viewMode == ViewMode::Realtime)
+        {
+            const auto left_value = (m_sortColumn == 2) ? left.rxBytesPerSec : left.txBytesPerSec;
+            const auto right_value = (m_sortColumn == 2) ? right.rxBytesPerSec : right.txBytesPerSec;
+            compare_result = left_value < right_value ? -1 : (left_value > right_value ? 1 : 0);
+        }
+        else
+        {
+            std::uint64_t left_value = 0;
+            std::uint64_t right_value = 0;
+            if (m_sortColumn == 2)
+            {
+                left_value = left.rxTotalBytes;
+                right_value = right.rxTotalBytes;
+            }
+            else if (m_sortColumn == 3)
+            {
+                left_value = left.txTotalBytes;
+                right_value = right.txTotalBytes;
+            }
+            else
+            {
+                left_value = left.rxTotalBytes + left.txTotalBytes;
+                right_value = right.rxTotalBytes + right.txTotalBytes;
+            }
+            compare_result = left_value < right_value ? -1 : (left_value > right_value ? 1 : 0);
+        }
+
+        if (compare_result == 0)
+        {
+            compare_result = CompareText(NormalizeDisplayName(left.exeName), NormalizeDisplayName(right.exeName));
+        }
+        return ascending ? (compare_result < 0) : (compare_result > 0);
+    });
+}
+
+int CTrafficDetailWindow::CompareText(const std::wstring& left, const std::wstring& right)
+{
+    return _wcsicmp(left.c_str(), right.c_str());
+}
+
 void CTrafficDetailWindow::LayoutTopControls(int width)
 {
     const int language_left = kMargin + kButtonWidth + 12;
@@ -1072,14 +1231,22 @@ bool CTrafficDetailWindow::HandleNotify(NMHDR* header)
         return true;
     }
 
+    if (header->idFrom == kListId && header->code == LVN_COLUMNCLICK)
+    {
+        const auto* info = reinterpret_cast<NMLISTVIEW*>(header);
+        UpdateSortState(info->iSubItem);
+        RefreshView();
+        return true;
+    }
+
     return false;
 }
 
 bool CTrafficDetailWindow::HandleRefreshTimer(WPARAM timer_id)
 {
-    if (timer_id != kRefreshTimerId || m_refreshPaused)
+    if (timer_id != kRefreshTimerId || m_refreshPaused || m_viewMode == ViewMode::Total)
     {
-        return false;
+        return timer_id == kRefreshTimerId;
     }
 
     if (IsInteractiveControlActive())
