@@ -223,7 +223,7 @@ const wchar_t* CProcNetPlugin::GetInfoText(PluginInfoIndex index, CHistoryTraffi
     case TMI_VERSION:
         return L"1.0.0";
     case TMI_URL:
-        return L"https://github.com/zhongyang219/TrafficMonitor";
+        return L"https://github.com/yuzifq/TrafficMonitor-traffic-stats";
     case TMI_API_VERSION:
         return L"7";
     default:
