@@ -64,11 +64,14 @@ private:
     static const wchar_t* GetInfoText(PluginInfoIndex index, CHistoryTrafficStore::DisplayLanguage language);
     static std::unordered_map<std::wstring, std::wstring> BuildPathMapByName(const std::vector<CProcessFinder::ProcessEntry>& processes);
     static AppTrafficEntry MakeAppEntry(const std::wstring& exe_name, const std::unordered_map<std::wstring, std::wstring>& path_by_name);
+    static CHistoryTrafficStore::AppTotalEntry MakeHistoryEntry(const AppTrafficEntry& app);
     static void SetItemPair(CProcNetItem& down_item, CProcNetItem& up_item, const AppTrafficEntry* app, int index, bool english);
     static std::wstring BuildTooltipText(const std::vector<AppTrafficEntry>& apps, int visible_count, bool english, const std::wstring& status_text);
     void UpdateDisplayText(const std::vector<AppTrafficEntry>& apps);
     void UpdateHistory(const std::vector<AppTrafficEntry>& apps);
+    void EnsureCollectorStarted();
     void EnsureHistoryInitialized();
+    void EnsureDetailWindow();
     void ShowDetailWindow(HWND parent);
 
 private:

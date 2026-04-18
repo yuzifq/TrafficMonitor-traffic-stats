@@ -13,6 +13,19 @@
 namespace
 {
 using LocalizedText = CProcNetPlugin::LocalizedText;
+using TrafficAmount = CHistoryTrafficStore::TrafficAmount;
+CProcNetPlugin* g_pluginInstance = nullptr;
+
+struct ProcessIdentity
+{
+    std::wstring exeName;
+    std::wstring exePath;
+};
+
+const wchar_t* SelectLocalizedText(CHistoryTrafficStore::DisplayLanguage language, const LocalizedText& text)
+{
+    return language == CHistoryTrafficStore::DisplayLanguage::English ? text.english : text.chinese;
+}
 
 std::wstring MakeItemId(int index, bool is_download)
 {
@@ -32,6 +45,25 @@ void AppendLabeledTraffic(std::wstring& text, const wchar_t* label, std::uint64_
 {
     text += label;
     text += Utils::FormatBytes(value);
+}
+
+void AppendTrafficLine(std::wstring& text, const wchar_t* label, std::uint64_t value)
+{
+    AppendLabeledTraffic(text, label, value);
+    text += L"\r\n";
+}
+
+void AppendTrafficBlock(
+    std::wstring& text,
+    CHistoryTrafficStore::DisplayLanguage language,
+    const TrafficAmount& amount,
+    const LocalizedText& download_label,
+    const LocalizedText& upload_label,
+    const LocalizedText& total_label)
+{
+    AppendTrafficLine(text, SelectLocalizedText(language, download_label), amount.rxBytes);
+    AppendTrafficLine(text, SelectLocalizedText(language, upload_label), amount.txBytes);
+    AppendLabeledTraffic(text, SelectLocalizedText(language, total_label), amount.rxBytes + amount.txBytes);
 }
 
 constexpr LocalizedText kPluginName{ L"Process Traffic Stats", L"进程流量统计" };
@@ -58,8 +90,11 @@ constexpr LocalizedText kDefaultUpLabel{ L"App Up", L"应用上" };
 
 CProcNetPlugin& CProcNetPlugin::Instance()
 {
-    static CProcNetPlugin instance;
-    return instance;
+    if (g_pluginInstance == nullptr)
+    {
+        g_pluginInstance = new CProcNetPlugin();
+    }
+    return *g_pluginInstance;
 }
 
 CProcNetPlugin::CProcNetPlugin()
@@ -67,8 +102,7 @@ CProcNetPlugin::CProcNetPlugin()
       m_tooltip(L"采集器尚未启动。"),
       m_collectorStarted(false),
       m_historyInitialized(false),
-      m_processCacheTick(0),
-      m_detailWindow(std::make_unique<CTrafficDetailWindow>(*this))
+      m_processCacheTick(0)
 {
     m_items.reserve(kMaxApps * 2);
     for (int i = 0; i < kMaxApps; ++i)
@@ -100,11 +134,7 @@ IPluginItem* CProcNetPlugin::GetItem(int index)
 
 void CProcNetPlugin::DataRequired()
 {
-    if (!m_collectorStarted)
-    {
-        m_collectorStarted = m_collector.Start();
-    }
-
+    EnsureCollectorStarted();
     EnsureHistoryInitialized();
     const auto apps = BuildAllApps();
     UpdateHistory(apps);
@@ -155,6 +185,16 @@ CProcNetPlugin::AppTrafficEntry CProcNetPlugin::MakeAppEntry(
     {
         entry.exePath = path_it->second;
     }
+    return entry;
+}
+
+CHistoryTrafficStore::AppTotalEntry CProcNetPlugin::MakeHistoryEntry(const AppTrafficEntry& app)
+{
+    CHistoryTrafficStore::AppTotalEntry entry{};
+    entry.appName = app.exeName;
+    entry.exePath = app.exePath;
+    entry.rxTotalBytes = app.rxTotalBytes;
+    entry.txTotalBytes = app.txTotalBytes;
     return entry;
 }
 
@@ -255,16 +295,15 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildAllApps() cons
     std::unordered_map<std::wstring, AppTrafficEntry> apps_by_name;
     for (const auto& entry : snapshot)
     {
+        ProcessIdentity identity{};
         const auto it = name_by_pid.find(entry.first);
-        std::wstring exe_name;
-        std::wstring exe_path;
         if (it != name_by_pid.end())
         {
-            exe_name = it->second;
-            const auto path_it = path_by_name.find(exe_name);
+            identity.exeName = it->second;
+            const auto path_it = path_by_name.find(identity.exeName);
             if (path_it != path_by_name.end())
             {
-                exe_path = path_it->second;
+                identity.exePath = path_it->second;
             }
         }
         else
@@ -273,22 +312,22 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildAllApps() cons
             const auto known_it = m_knownProcessesByPid.find(entry.first);
             if (known_it != m_knownProcessesByPid.end())
             {
-                exe_name = known_it->second.exeName;
-                exe_path = known_it->second.exePath;
+                identity.exeName = known_it->second.exeName;
+                identity.exePath = known_it->second.exePath;
             }
             else
             {
-                exe_name = L"PID" + std::to_wstring(entry.first);
+                identity.exeName = L"PID" + std::to_wstring(entry.first);
             }
         }
 
-        auto& app = apps_by_name[exe_name];
+        auto& app = apps_by_name[identity.exeName];
         if (app.exeName.empty())
         {
-            app = MakeAppEntry(exe_name, path_by_name);
+            app = MakeAppEntry(identity.exeName, path_by_name);
             if (app.exePath.empty())
             {
-                app.exePath = exe_path;
+                app.exePath = identity.exePath;
             }
         }
         app.rxBytesPerSec += entry.second.rxBytesPerSec;
@@ -338,20 +377,10 @@ std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTim
 {
     const auto selected = m_historyStore.GetRangeTotal(range);
     const auto all = m_historyStore.GetAllTimeTotal();
-    const auto selected_total = selected.rxBytes + selected.txBytes;
-    const auto all_total = all.rxBytes + all.txBytes;
     std::wstring text;
-    AppendLabeledTraffic(text, GetLocalizedText(language, kRangeDownload), selected.rxBytes);
-    text += L"\r\n";
-    AppendLabeledTraffic(text, GetLocalizedText(language, kRangeUpload), selected.txBytes);
-    text += L"\r\n";
-    AppendLabeledTraffic(text, GetLocalizedText(language, kRangeTotal), selected_total);
+    AppendTrafficBlock(text, language, selected, kRangeDownload, kRangeUpload, kRangeTotal);
     text += L"\r\n\r\n";
-    AppendLabeledTraffic(text, GetLocalizedText(language, kAllTimeDownload), all.rxBytes);
-    text += L"\r\n";
-    AppendLabeledTraffic(text, GetLocalizedText(language, kAllTimeUpload), all.txBytes);
-    text += L"\r\n";
-    AppendLabeledTraffic(text, GetLocalizedText(language, kAllTimeTotal), all_total);
+    AppendTrafficBlock(text, language, all, kAllTimeDownload, kAllTimeUpload, kAllTimeTotal);
     text += L"\r\n\r\n";
     text += GetLocalizedText(language, kCurrentStatus);
     text += m_collector.GetStatusText();
@@ -442,14 +471,17 @@ void CProcNetPlugin::UpdateHistory(const std::vector<AppTrafficEntry>& apps)
     history_apps.reserve(apps.size());
     for (const auto& app : apps)
     {
-        CHistoryTrafficStore::AppTotalEntry entry{};
-        entry.appName = app.exeName;
-        entry.exePath = app.exePath;
-        entry.rxTotalBytes = app.rxTotalBytes;
-        entry.txTotalBytes = app.txTotalBytes;
-        history_apps.push_back(std::move(entry));
+        history_apps.push_back(MakeHistoryEntry(app));
     }
     m_historyStore.Update(history_apps);
+}
+
+void CProcNetPlugin::EnsureCollectorStarted()
+{
+    if (!m_collectorStarted)
+    {
+        m_collectorStarted = m_collector.Start();
+    }
 }
 
 void CProcNetPlugin::EnsureHistoryInitialized()
@@ -463,13 +495,19 @@ void CProcNetPlugin::EnsureHistoryInitialized()
     m_historyInitialized = true;
 }
 
+void CProcNetPlugin::EnsureDetailWindow()
+{
+    if (m_detailWindow == nullptr)
+    {
+        m_detailWindow = std::make_unique<CTrafficDetailWindow>(*this);
+    }
+}
+
 void CProcNetPlugin::ShowDetailWindow(HWND parent)
 {
-    if (!m_collectorStarted)
-    {
-        m_collectorStarted = m_collector.Start();
-    }
+    EnsureCollectorStarted();
     EnsureHistoryInitialized();
+    EnsureDetailWindow();
 
     if (m_detailWindow != nullptr)
     {
