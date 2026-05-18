@@ -45,7 +45,7 @@ Open `ProcessTrafficPlugin.sln` in Visual Studio 2022 or Build Tools for Visual 
 - **Configuration:** `Release`
 - **Platform:** `x64`
 
-You can also build from the command line with MSBuild:
+You can build from the command line with MSBuild:
 
 ```powershell
 msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
