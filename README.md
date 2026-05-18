@@ -46,7 +46,7 @@
 - **配置：** `Release`
 - **平台：** `x64`
 
-也可以通过命令行使用 MSBuild 进行编译：
+通过命令行使用 MSBuild 进行编译：
 
 ```powershell
 msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
