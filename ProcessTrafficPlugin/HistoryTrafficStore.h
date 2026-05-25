@@ -52,6 +52,7 @@ private:
     void EnsureLoaded();
     void Load();
     void Save() const;
+    void AppendHistoryEntries(const std::wstring& bucket_key, const std::vector<std::pair<std::wstring, TrafficAmount>>& entries) const;
     void LoadState();
     void SaveState() const;
 
@@ -64,6 +65,8 @@ private:
     static void NormalizeSystemTime(SYSTEMTIME& time);
     static ULONGLONG ToFileTimeValue(const SYSTEMTIME& time);
     static bool BucketIntersectsRange(const std::wstring& bucket_key, const DateTimeRange& range);
+    static bool IsSameRange(const DateTimeRange& left, const DateTimeRange& right);
+    void InvalidateCaches();
 
 private:
     std::wstring m_baseDir;
@@ -76,4 +79,10 @@ private:
     std::unordered_map<std::wstring, TrafficAmount> m_lastSeenTotals;
     DateTimeRange m_preferredRange{};
     DisplayLanguage m_preferredLanguage{ DisplayLanguage::English };
+    mutable bool m_rangeCacheValid{ false };
+    mutable DateTimeRange m_cachedRange{};
+    mutable std::vector<AppTotalEntry> m_cachedRangeApps;
+    mutable TrafficAmount m_cachedRangeTotal{};
+    mutable bool m_allTimeCacheValid{ false };
+    mutable TrafficAmount m_cachedAllTimeTotal{};
 };

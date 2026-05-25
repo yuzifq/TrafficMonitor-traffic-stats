@@ -64,6 +64,19 @@ void WritePathEntry(std::wofstream& output, const std::wstring& app_name, const 
 {
     output << L"path\t" << app_name << L'\t' << exe_path << L'\n';
 }
+
+bool WriteHistoryEntry(
+    std::wofstream& output,
+    const std::wstring& bucket_key,
+    const std::wstring& app_name,
+    const CHistoryTrafficStore::TrafficAmount& amount)
+{
+    output << bucket_key << L'\t'
+           << app_name << L'\t'
+           << amount.rxBytes << L'\t'
+           << amount.txBytes << L'\n';
+    return static_cast<bool>(output);
+}
 }
 
 void CHistoryTrafficStore::Initialize(const std::wstring& base_dir)
@@ -84,6 +97,7 @@ void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
     EnsureLoaded();
     const auto bucket_key = GetCurrentMinuteKey();
     auto& bucket = m_bucketByApp[bucket_key];
+    std::vector<std::pair<std::wstring, TrafficAmount>> delta_entries;
 
     for (const auto& app : apps)
     {
@@ -101,6 +115,7 @@ void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
             auto& stored = bucket[app.appName];
             stored.rxBytes += delta.rxBytes;
             stored.txBytes += delta.txBytes;
+            delta_entries.emplace_back(app.appName, delta);
             m_dirty = true;
         }
 
@@ -114,8 +129,9 @@ void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
 
     if (m_dirty)
     {
-        Save();
+        AppendHistoryEntries(bucket_key, delta_entries);
         m_dirty = false;
+        InvalidateCaches();
     }
     SaveState();
 }
@@ -124,6 +140,10 @@ std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeA
 {
     const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
     const auto normalized = NormalizeRange(range);
+    if (m_rangeCacheValid && IsSameRange(m_cachedRange, normalized))
+    {
+        return m_cachedRangeApps;
+    }
 
     std::unordered_map<std::wstring, TrafficAmount> totals_by_app;
     for (const auto& bucket_entry : m_bucketByApp)
@@ -141,6 +161,7 @@ std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeA
 
     std::vector<AppTotalEntry> result;
     result.reserve(totals_by_app.size());
+    TrafficAmount total{};
     for (const auto& entry : totals_by_app)
     {
         AppTotalEntry item{};
@@ -152,26 +173,33 @@ std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeA
         }
         item.rxTotalBytes = entry.second.rxBytes;
         item.txTotalBytes = entry.second.txBytes;
+        AddAmount(total, entry.second);
         result.push_back(item);
     }
+    m_cachedRange = normalized;
+    m_cachedRangeApps = result;
+    m_cachedRangeTotal = total;
+    m_rangeCacheValid = true;
     return result;
 }
 
 CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::GetRangeTotal(const DateTimeRange& range) const
 {
-    TrafficAmount total{};
-    const auto apps = GetRangeAppTotals(range);
-    for (const auto& app : apps)
+    const auto normalized = NormalizeRange(range);
+    if (!m_rangeCacheValid || !IsSameRange(m_cachedRange, normalized))
     {
-        total.rxBytes += app.rxTotalBytes;
-        total.txBytes += app.txTotalBytes;
+        static_cast<void>(GetRangeAppTotals(normalized));
     }
-    return total;
+    return m_cachedRangeTotal;
 }
 
 CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::GetAllTimeTotal() const
 {
     const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
+    if (m_allTimeCacheValid)
+    {
+        return m_cachedAllTimeTotal;
+    }
 
     TrafficAmount total{};
     for (const auto& bucket_entry : m_bucketByApp)
@@ -181,6 +209,8 @@ CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::GetAllTimeTotal() cons
             AddAmount(total, app_entry.second);
         }
     }
+    m_cachedAllTimeTotal = total;
+    m_allTimeCacheValid = true;
     return total;
 }
 
@@ -240,6 +270,7 @@ void CHistoryTrafficStore::Load()
 {
     m_bucketByApp.clear();
     m_pathByApp.clear();
+    InvalidateCaches();
     if (m_filePath.empty() || !std::filesystem::exists(m_filePath))
     {
         return;
@@ -263,8 +294,8 @@ void CHistoryTrafficStore::Load()
         }
 
         auto& entry = m_bucketByApp[bucket_key][app_name];
-        entry.rxBytes = _wcstoui64(rx_text.c_str(), nullptr, 10);
-        entry.txBytes = _wcstoui64(tx_text.c_str(), nullptr, 10);
+        entry.rxBytes += _wcstoui64(rx_text.c_str(), nullptr, 10);
+        entry.txBytes += _wcstoui64(tx_text.c_str(), nullptr, 10);
     }
 }
 
@@ -288,10 +319,36 @@ void CHistoryTrafficStore::Save() const
     }
 }
 
+void CHistoryTrafficStore::AppendHistoryEntries(
+    const std::wstring& bucket_key,
+    const std::vector<std::pair<std::wstring, TrafficAmount>>& entries) const
+{
+    if (m_filePath.empty() || entries.empty())
+    {
+        return;
+    }
+
+    std::wofstream output{ std::filesystem::path(m_filePath), std::ios::app };
+    if (!output.is_open())
+    {
+        Save();
+        return;
+    }
+
+    for (const auto& entry : entries)
+    {
+        if (!WriteHistoryEntry(output, bucket_key, entry.first, entry.second))
+        {
+            break;
+        }
+    }
+}
+
 void CHistoryTrafficStore::LoadState()
 {
     m_lastSeenTotals.clear();
     m_pathByApp.clear();
+    InvalidateCaches();
     m_preferredRange = GetDefaultRange();
     m_preferredLanguage = DisplayLanguage::English;
 
@@ -507,6 +564,21 @@ void CHistoryTrafficStore::NormalizeSystemTime(SYSTEMTIME& time)
 {
     time.wSecond = 0;
     time.wMilliseconds = 0;
+}
+
+bool CHistoryTrafficStore::IsSameRange(const DateTimeRange& left, const DateTimeRange& right)
+{
+    return ToFileTimeValue(left.start) == ToFileTimeValue(right.start) &&
+           ToFileTimeValue(left.end) == ToFileTimeValue(right.end);
+}
+
+void CHistoryTrafficStore::InvalidateCaches()
+{
+    m_rangeCacheValid = false;
+    m_cachedRangeApps.clear();
+    m_cachedRangeTotal = {};
+    m_allTimeCacheValid = false;
+    m_cachedAllTimeTotal = {};
 }
 
 ULONGLONG CHistoryTrafficStore::ToFileTimeValue(const SYSTEMTIME& time)
