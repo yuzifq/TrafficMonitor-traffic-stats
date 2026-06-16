@@ -10,6 +10,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 struct _EVENT_RECORD;
 
@@ -29,6 +30,7 @@ public:
 
     bool Start();
     void Stop();
+    void PruneProcessSnapshots(const std::vector<DWORD>& active_process_ids);
 
     std::unordered_map<DWORD, ProcessTrafficSnapshot> GetProcessTrafficSnapshot() const;
     std::wstring GetStatusText() const;

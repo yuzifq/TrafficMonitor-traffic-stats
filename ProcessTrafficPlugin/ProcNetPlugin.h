@@ -70,9 +70,10 @@ private:
     void UpdateDisplayText(const std::vector<AppTrafficEntry>& apps);
     void UpdateHistory(const std::vector<AppTrafficEntry>& apps);
     void EnsureCollectorStarted();
-    void EnsureHistoryInitialized();
+    bool EnsureHistoryInitialized();
     void EnsureDetailWindow();
     void ShowDetailWindow(HWND parent);
+    void PruneLongRunningCaches();
 
 private:
     static constexpr int kMaxApps = 5;
@@ -85,6 +86,7 @@ private:
     std::wstring m_configDir;
     bool m_collectorStarted;
     bool m_historyInitialized;
+    mutable std::mutex m_historyMutex;
     mutable std::mutex m_processCacheMutex;
     mutable ULONGLONG m_processCacheTick;
     mutable std::vector<CProcessFinder::ProcessEntry> m_cachedProcesses;

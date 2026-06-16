@@ -6,6 +6,7 @@
 #include <array>
 #include <cstring>
 #include <cwchar>
+#include <unordered_set>
 #include <utility>
 
 #pragma comment(lib, "advapi32.lib")
@@ -78,6 +79,35 @@ void CEtwProcNetCollector::Stop()
 
     StopTraceSession();
     UpdateStatus(L"Stopped");
+}
+
+void CEtwProcNetCollector::PruneProcessSnapshots(const std::vector<DWORD>& active_process_ids)
+{
+    if (active_process_ids.empty())
+    {
+        return;
+    }
+
+    std::unordered_set<DWORD> active_ids;
+    active_ids.reserve(active_process_ids.size());
+    for (const auto process_id : active_process_ids)
+    {
+        active_ids.insert(process_id);
+    }
+
+    std::lock_guard<std::mutex> lock(m_rateMutex);
+    for (auto it = m_snapshotByPid.begin(); it != m_snapshotByPid.end();)
+    {
+        if (active_ids.find(it->first) != active_ids.end())
+        {
+            ++it;
+            continue;
+        }
+
+        m_lastRxTotalByPid.erase(it->first);
+        m_lastTxTotalByPid.erase(it->first);
+        it = m_snapshotByPid.erase(it);
+    }
 }
 
 std::unordered_map<DWORD, CEtwProcNetCollector::ProcessTrafficSnapshot> CEtwProcNetCollector::GetProcessTrafficSnapshot() const

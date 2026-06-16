@@ -50,6 +50,23 @@
 
 ```powershell
 msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
+
+## GitHub 上传辅助
+
+如果需要一键整理并上传 GitHub 仓库文件，请使用：
+
+- `GitHubUploadTools/Run-GitHubUpload-New.cmd`
+
+它会调用：
+
+- `GitHubUploadTools/UploadToGitHub-New.cmd`
+- `GitHubUploadTools/Prepare-GitHubUpload.ps1`
+
+并将以下内容整理到 `GitHubUploadBundle`：
+
+- `ProcessTrafficPlugin.dll`
+- `ProcessTrafficPlugin.sln`
+- `ProcessTrafficPlugin/`
 ```
 
 
@@ -65,6 +82,5 @@ msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
 <img width="710" height="462" alt="image" src="https://github.com/user-attachments/assets/e9ece008-b293-482a-adcd-f8b49aafc6fc" />
 
 
-<img width="1180" height="620" alt="Image" src="https://github.com/user-attachments/assets/54795847-9b84-4461-9223-53b915c9ba2f" />
-
-<img width="1180" height="620" alt="Image" src="https://github.com/user-attachments/assets/aa0e0a70-97f0-49c0-9df8-cd7ebc8e830d" />
+<img width="897" height="620" alt="image" src="https://github.com/user-attachments/assets/ed9b9f6a-befa-4301-acb7-1157e272b63e" />
+<img width="920" height="620" alt="image" src="https://github.com/user-attachments/assets/ab1d1180-ad20-4882-964d-30e3774cda1f" />

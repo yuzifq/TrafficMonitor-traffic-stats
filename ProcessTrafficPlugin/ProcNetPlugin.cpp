@@ -15,6 +15,7 @@ namespace
 using LocalizedText = CProcNetPlugin::LocalizedText;
 using TrafficAmount = CHistoryTrafficStore::TrafficAmount;
 CProcNetPlugin* g_pluginInstance = nullptr;
+constexpr size_t kMaxKnownProcessCacheEntries = 4096;
 
 struct ProcessIdentity
 {
@@ -135,10 +136,14 @@ IPluginItem* CProcNetPlugin::GetItem(int index)
 void CProcNetPlugin::DataRequired()
 {
     EnsureCollectorStarted();
-    EnsureHistoryInitialized();
+    const bool history_ready = EnsureHistoryInitialized();
     const auto apps = BuildAllApps();
-    UpdateHistory(apps);
+    if (history_ready)
+    {
+        UpdateHistory(apps);
+    }
     UpdateDisplayText(apps);
+    PruneLongRunningCaches();
 }
 
 std::vector<CProcessFinder::ProcessEntry> CProcNetPlugin::GetCachedProcesses() const
@@ -154,6 +159,19 @@ std::vector<CProcessFinder::ProcessEntry> CProcNetPlugin::GetCachedProcesses() c
             {
                 m_knownProcessesByPid[process.pid] = process;
             }
+        }
+        if (m_knownProcessesByPid.size() > kMaxKnownProcessCacheEntries)
+        {
+            std::unordered_map<DWORD, CProcessFinder::ProcessEntry> active_processes;
+            active_processes.reserve(m_cachedProcesses.size());
+            for (const auto& process : m_cachedProcesses)
+            {
+                if (!process.exeName.empty())
+                {
+                    active_processes.emplace(process.pid, process);
+                }
+            }
+            m_knownProcessesByPid.swap(active_processes);
         }
         m_processCacheTick = now;
     }
@@ -221,7 +239,7 @@ const wchar_t* CProcNetPlugin::GetInfoText(PluginInfoIndex index, CHistoryTraffi
     case TMI_COPYRIGHT:
         return L"Copyright (c) 2026 yuzifq";
     case TMI_VERSION:
-        return L"1.0.1";
+        return L"1.1.0";
     case TMI_URL:
         return L"https://github.com/yuzifq/TrafficMonitor-traffic-stats";
     case TMI_API_VERSION:
@@ -233,7 +251,7 @@ const wchar_t* CProcNetPlugin::GetInfoText(PluginInfoIndex index, CHistoryTraffi
 
 const wchar_t* CProcNetPlugin::GetInfo(PluginInfoIndex index)
 {
-    return GetInfoText(index, m_historyStore.GetPreferredLanguage());
+    return GetInfoText(index, GetPreferredLanguage());
 }
 
 const wchar_t* CProcNetPlugin::GetTooltipInfo()
@@ -253,7 +271,7 @@ const wchar_t* CProcNetPlugin::GetCommandName(int command_index)
         return nullptr;
     }
 
-    return GetLocalizedText(m_historyStore.GetPreferredLanguage(), kCommandName);
+    return GetLocalizedText(GetPreferredLanguage(), kCommandName);
 }
 
 void CProcNetPlugin::OnPluginCommand(int command_index, void* hWnd, void* para)
@@ -358,6 +376,7 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildAllApps() cons
 std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(const CHistoryTrafficStore::DateTimeRange& range) const
 {
     std::vector<AppTrafficEntry> result;
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     const auto history_apps = m_historyStore.GetRangeAppTotals(range);
 
     result.reserve(history_apps.size());
@@ -375,6 +394,7 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(co
 
 std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range, CHistoryTrafficStore::DisplayLanguage language) const
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     const auto selected = m_historyStore.GetRangeTotal(range);
     const auto all = m_historyStore.GetAllTimeTotal();
     std::wstring text;
@@ -389,21 +409,25 @@ std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTim
 
 CHistoryTrafficStore::DateTimeRange CProcNetPlugin::GetPreferredRange() const
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     return m_historyStore.GetPreferredRange();
 }
 
 void CProcNetPlugin::SetPreferredRange(const CHistoryTrafficStore::DateTimeRange& range)
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     m_historyStore.SetPreferredRange(range);
 }
 
 CHistoryTrafficStore::DisplayLanguage CProcNetPlugin::GetPreferredLanguage() const
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     return m_historyStore.GetPreferredLanguage();
 }
 
 void CProcNetPlugin::SetPreferredLanguage(CHistoryTrafficStore::DisplayLanguage language)
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     m_historyStore.SetPreferredLanguage(language);
 }
 
@@ -452,7 +476,7 @@ std::wstring CProcNetPlugin::BuildTooltipText(const std::vector<AppTrafficEntry>
 void CProcNetPlugin::UpdateDisplayText(const std::vector<AppTrafficEntry>& apps)
 {
     const auto visible_count = static_cast<int>(apps.size()) < kMaxApps ? static_cast<int>(apps.size()) : kMaxApps;
-    const bool english = m_historyStore.GetPreferredLanguage() == CHistoryTrafficStore::DisplayLanguage::English;
+    const bool english = GetPreferredLanguage() == CHistoryTrafficStore::DisplayLanguage::English;
 
     for (int i = 0; i < kMaxApps; ++i)
     {
@@ -473,6 +497,7 @@ void CProcNetPlugin::UpdateHistory(const std::vector<AppTrafficEntry>& apps)
     {
         history_apps.push_back(MakeHistoryEntry(app));
     }
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     m_historyStore.Update(history_apps);
 }
 
@@ -484,15 +509,22 @@ void CProcNetPlugin::EnsureCollectorStarted()
     }
 }
 
-void CProcNetPlugin::EnsureHistoryInitialized()
+bool CProcNetPlugin::EnsureHistoryInitialized()
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     if (m_historyInitialized)
     {
-        return;
+        return true;
+    }
+
+    if (m_configDir.empty())
+    {
+        return false;
     }
 
     m_historyStore.Initialize(m_configDir);
     m_historyInitialized = true;
+    return true;
 }
 
 void CProcNetPlugin::EnsureDetailWindow()
@@ -513,4 +545,16 @@ void CProcNetPlugin::ShowDetailWindow(HWND parent)
     {
         m_detailWindow->Show(parent);
     }
+}
+
+void CProcNetPlugin::PruneLongRunningCaches()
+{
+    const auto processes = GetCachedProcesses();
+    std::vector<DWORD> active_process_ids;
+    active_process_ids.reserve(processes.size());
+    for (const auto& process : processes)
+    {
+        active_process_ids.push_back(process.pid);
+    }
+    m_collector.PruneProcessSnapshots(active_process_ids);
 }

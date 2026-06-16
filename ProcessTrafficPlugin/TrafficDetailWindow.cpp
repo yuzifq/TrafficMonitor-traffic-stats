@@ -49,6 +49,7 @@ constexpr int kSummaryWidth = 350;
 constexpr int kSummaryHeight = 150;
 constexpr int kQuickButtonWidth = 58;
 constexpr int kQuickButtonHeight = 28;
+constexpr size_t kMaxIconCacheEntries = 512;
 constexpr int kTopAreaHeight = kMargin + kButtonHeight + 10;
 constexpr int kRangeRowSpacing = 36;
 constexpr int kDateTimePickerHeight = 28;
@@ -360,6 +361,31 @@ void CTrafficDetailWindow::EnsureImageList()
     m_smallImageList = ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 16, 16);
     ListView_SetImageList(m_list, m_smallImageList, LVSIL_SMALL);
     m_defaultIconIndex = AddIconToImageList(LoadDefaultExeIcon());
+}
+
+void CTrafficDetailWindow::ResetIconCache()
+{
+    if (m_list != nullptr && m_smallImageList != nullptr)
+    {
+        const auto old_image_list = ListView_SetImageList(m_list, nullptr, LVSIL_SMALL);
+        if (old_image_list != nullptr)
+        {
+            ImageList_Destroy(old_image_list);
+        }
+        m_smallImageList = nullptr;
+    }
+
+    m_iconIndexByKey.clear();
+    m_defaultIconIndex = -1;
+    EnsureImageList();
+}
+
+void CTrafficDetailWindow::ResetIconCacheIfNeeded()
+{
+    if (m_iconIndexByKey.size() > kMaxIconCacheEntries)
+    {
+        ResetIconCache();
+    }
 }
 
 void CTrafficDetailWindow::CreateOrActivate(HWND parent)
@@ -803,6 +829,7 @@ void CTrafficDetailWindow::SaveCurrentColumnWidths()
 
 void CTrafficDetailWindow::FillRealtimeView()
 {
+    ResetIconCacheIfNeeded();
     auto apps = m_plugin.BuildAllApps();
     SortApps(apps);
     EnsureListItemCount(static_cast<int>(apps.size()));
@@ -814,6 +841,7 @@ void CTrafficDetailWindow::FillRealtimeView()
 
 void CTrafficDetailWindow::FillTotalView()
 {
+    ResetIconCacheIfNeeded();
     auto apps = m_plugin.BuildHistoryApps(GetSelectedRange());
     if (m_hideAnonymousPidItems)
     {
@@ -887,7 +915,7 @@ int CTrafficDetailWindow::GetIconIndex(const std::wstring& exe_name, const std::
     }
 
     HICON icon = LoadSmallExeIcon(exe_path);
-    if (icon == nullptr && !exe_name.empty())
+    if (icon == nullptr && !exe_name.empty() && !IsAnonymousPidName(exe_name))
     {
         icon = LoadSmallExeIcon(CProcessFinder::FindFirstProcessPathByExeName(exe_name));
     }

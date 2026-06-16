@@ -55,6 +55,8 @@ private:
     void EnsureListItemCount(int item_count);
     void UpsertListRow(int row, int image_index, const std::vector<std::wstring>& columns);
     void EnsureImageList();
+    void ResetIconCache();
+    void ResetIconCacheIfNeeded();
     int GetIconIndex(const std::wstring& exe_name, const std::wstring& exe_path);
     int AddIconToImageList(HICON icon);
     HICON LoadSmallExeIcon(const std::wstring& exe_path) const;
