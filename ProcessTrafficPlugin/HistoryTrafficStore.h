@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 class CHistoryTrafficStore
@@ -48,10 +49,16 @@ public:
 
 private:
     using BucketAppMap = std::unordered_map<std::wstring, TrafficAmount>;
+    struct BucketTimeRange
+    {
+        ULONGLONG start{};
+        ULONGLONG end{};
+    };
 
     void EnsureLoaded();
     void Load();
-    void Save() const;
+    void LoadDailyHistoryFiles(TrafficAmount& loaded_total) const;
+    void LoadRangeDailyHistoryFiles(const DateTimeRange& range, BucketAppMap& totals_by_app, TrafficAmount& total) const;
     void AppendHistoryEntries(const std::wstring& bucket_key, const std::vector<std::pair<std::wstring, TrafficAmount>>& entries) const;
     void LoadState();
     void SaveState() const;
@@ -60,21 +67,23 @@ private:
     static DateTimeRange NormalizeRange(const DateTimeRange& range);
     static std::wstring GetCurrentMinuteKey();
     static std::wstring FormatMinuteTime(const SYSTEMTIME& time);
+    static std::wstring GetDateKeyFromMinuteKey(const std::wstring& bucket_key);
+    static std::wstring GetTimeKeyFromMinuteKey(const std::wstring& bucket_key);
     static bool TryParseStoredTime(const std::wstring& text, SYSTEMTIME& time);
     static bool TryParseBucketKey(const std::wstring& bucket_key, SYSTEMTIME& bucket_start, SYSTEMTIME& bucket_end);
+    static bool TryParseBucketTimeRange(const std::wstring& bucket_key, BucketTimeRange& range);
     static void NormalizeSystemTime(SYSTEMTIME& time);
     static ULONGLONG ToFileTimeValue(const SYSTEMTIME& time);
-    static bool BucketIntersectsRange(const std::wstring& bucket_key, const DateTimeRange& range);
+    static bool BucketIntersectsRange(const BucketTimeRange& bucket_range, ULONGLONG range_start, ULONGLONG range_end);
     static bool IsSameRange(const DateTimeRange& left, const DateTimeRange& right);
+    void InvalidateRangeCache() const;
     void InvalidateCaches();
 
 private:
     std::wstring m_baseDir;
-    std::wstring m_filePath;
+    std::wstring m_historyDir;
     std::wstring m_stateFilePath;
     bool m_loaded{ false };
-    mutable bool m_dirty{ false };
-    std::unordered_map<std::wstring, BucketAppMap> m_bucketByApp;
     std::unordered_map<std::wstring, std::wstring> m_pathByApp;
     std::unordered_map<std::wstring, TrafficAmount> m_lastSeenTotals;
     DateTimeRange m_preferredRange{};
