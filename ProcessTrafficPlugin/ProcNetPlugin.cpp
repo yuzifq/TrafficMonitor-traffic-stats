@@ -221,7 +221,7 @@ const wchar_t* CProcNetPlugin::GetInfoText(PluginInfoIndex index, CHistoryTraffi
     case TMI_COPYRIGHT:
         return L"Copyright (c) 2026 yuzifq";
     case TMI_VERSION:
-        return L"1.0.1";
+        return L"1.1.0";
     case TMI_URL:
         return L"https://github.com/yuzifq/TrafficMonitor-traffic-stats";
     case TMI_API_VERSION:
