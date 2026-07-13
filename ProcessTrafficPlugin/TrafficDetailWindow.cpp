@@ -470,4 +470,927 @@ void CTrafficDetailWindow::CreateChildControls(HWND hwnd)
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
         kMargin, kTopAreaHeight, 860, kListInitialHeight, hwnd,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kListId)), GetModuleHandleW(nullptr), nullptr);
-    ListView_SetExtendedListViewStyle(m_list, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER | LVS_EX_Hã5¶‰žËkºwµça•%½¸¡•á•}Á…Ñ ¤ì(€€€¥˜€¡¥½¸€ôô¹Õ±±ÁÑÈ€˜˜€…•á•}¹…µ”¹•µÁÑä ¤¤(€€€ì(€€€€€€€¥½¸€ô1½…‘Mµ…±±á•%½¸¡AÉ½•ÍÍ¥¹‘•Èèé¥¹‘¥ÉÍÑAÉ½•ÍÍA…Ñ¡	åá•9…µ”¡•á•}¹…µ”¤¤ì(€€€ô((€€€¥¹Ð¥µ…•}¥¹‘•à€ôµ}‘•™…Õ±Ñ%½¹%¹‘•àì(€€€¥˜€¡¥½¸€„ô¹Õ±±ÁÑÈ¤(€€€ì(€€€€€€€¥µ…•}¥¹‘•à€ô‘‘%½¹Q½%µ…•1¥ÍÐ¡¥½¸¤ì(€€€ô((€€€µ}¥½¹%¹‘•á	å-•ä¹•µÁ±…”¡…¡•}­•ä°¥µ…•}¥¹‘•à¤ì(€€€É•ÑÕÉ¸¥µ…•}¥¹‘•àì)ô()¥¹ÐQÉ…™™¥•Ñ…¥±]¥¹‘½Üèé‘‘%½¹Q½%µ…•1¥ÍÐ¡!%=8¥½¸¤)ì(€€€¥˜€¡¥½¸€ôô¹Õ±±ÁÑÈ¤(€€€ì(€€€€€€€É•ÑÕÉ¸€´Äì(€€€ô((€€€½¹ÍÐ¥¹Ð¥µ…•}¥¹‘•à€ôµ}Íµ…±±%µ…•1¥ÍÐ€„ô¹Õ±±ÁÑÈ€ü%µ…•1¥ÍÑ}‘‘%½¸¡µ}Íµ…±±%µ…•1¥ÍÐ°¥½¸¤€è€´Äì(€€€•ÍÑÉ½å%½¸¡¥½¸¤ì(€€€É•ÑÕÉ¸¥µ…•}¥¹‘•àì)ô()!%=8QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé1½…‘Mµ…±±á•%½¸¡½¹ÍÐÍÑèéÝÍÑÉ¥¹œ˜•á•}Á…Ñ ¤½¹ÍÐ)ì(€€€¥˜€¡•á•}Á…Ñ ¹•µÁÑä ¤¤(€€€ì(€€€€€€€É•ÑÕÉ¸¹Õ±±ÁÑÈì(€€€ô((€€€M!%1%9=\™¥±•}¥¹™½íôì(€€€¥˜€¡M!•Ñ¥±•%¹™½\¡•á•}Á…Ñ ¹}ÍÑÈ ¤°%1}QQI%	UQ}9=I50°€™™¥±•}¥¹™¼°Í¥é•½˜¡™¥±•}¥¹™¼¤°(€€€€€€€M!%}%=8ðM!%}M511%=8¤€ôô€À¤(€€€ì(€€€€€€€É•ÑÕÉ¸¹Õ±±ÁÑÈì(€€€ô((€€€É•ÑÕÉ¸™¥±•}¥¹™¼¹¡%½¸ì)ô()!%=8QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé1½…‘•™…Õ±Ñá•%½¸ ¤½¹ÍÐ)ì(€€€M!%1%9=\™¥±•}¥¹™½íôì(€€€¥˜€¡M!•Ñ¥±•%¹™½\¡0ˆ¹•á”ˆ°%1}QQI%	UQ}9=I50°€™™¥±•}¥¹™¼°Í¥é•½˜¡™¥±•}¥¹™¼¤°(€€€€€€€M!%}UM%1QQI%	UQLðM!%}%=8ðM!%}M511%=8¤€ôô€À¤(€€€ì(€€€€€€€É•ÑÕÉ¸¹Õ±±ÁÑÈì(€€€ô((€€€É•ÑÕÉ¸™¥±•}¥¹™¼¹¡%½¸ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½ÜèéI•Í¥é•¡¥±‘É•¸¡¥¹ÐÝ¥‘Ñ °¥¹Ð¡•¥¡Ð¤)ì(€€€1…å½ÕÑQ½Á½¹ÑÉ½±Ì¡Ý¥‘Ñ ¤ì(€€€1…å½ÕÑ	½ÑÑ½µ½¹ÑÉ½±Ì¡Ý¥‘Ñ °¡•¥¡Ð¤ì(€€€1…å½ÕÑ1¥ÍÑ½¹ÑÉ½°¡Ý¥‘Ñ °¡•¥¡Ð¤ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé±•…É1¥ÍÐ ¤)ì(€€€1¥ÍÑY¥•Ý}•±•Ñ•±±%Ñ•µÌ¡µ}±¥ÍÐ¤ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½ÜèéM•Ñ1¥ÍÑQ•áÐ¡¥¹ÐÉ½Ü°¥¹Ð½±Õµ¸°½¹ÍÐÝ¡…É}Ð¨Ñ•áÐ¤)ì(€€€1¥ÍÑY¥•Ý}M•Ñ%Ñ•µQ•áÐ¡µ}±¥ÍÐ°É½Ü°½±Õµ¸°½¹ÍÑ}…ÍÐñ1A]MQHø¡Ñ•áÐ¤¤ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½ÜèéM•Ñ]¥¹‘½ÝQ•áÑ%™AÉ•Í•¹Ð¡!]9½¹ÑÉ½°°½¹ÍÐÝ¡…É}Ð¨Ñ•áÐ¤½¹ÍÐ)ì(€€€¥˜€¡½¹ÑÉ½°€„ô¹Õ±±ÁÑÈ¤(€€€ì(€€€€€€€M•Ñ]¥¹‘½ÝQ•áÑ\¡½¹ÑÉ½°°Ñ•áÐ¤ì(€€€ô)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½ÜèéUÁ‘…Ñ•M½ÉÑMÑ…Ñ”¡¥¹Ð±¥­•‘}½±Õµ¸¤)ì(€€€¥˜€¡±¥­•‘}½±Õµ¸€ðô€À¤(€€€ì(€€€€€€€É•ÑÕÉ¸ì(€€€ô((€€€½¹ÍÐ‰½½°Ñ•áÑ}½±Õµ¸€ô±¥­•‘}½±Õµ¸€ôô€Äì(€€€½¹ÍÐ‰½½°Ñ½Ñ…±}½±Õµ¹}¥¹}Ñ½Ñ…±}Ù¥•Ü€ô€¡µ}Ù¥•Ý5½‘”€ôôY¥•Ý5½‘”èéQ½Ñ…°€˜˜±¥­•‘}½±Õµ¸€ôô€Ð¤ì((€€€¥˜€¡µ}Í½ÉÑ½±Õµ¸€„ô±¥­•‘}½±Õµ¸¤(€€€ì(€€€€€€€µ}Í½ÉÑ½±Õµ¸€ô±¥­•‘}½±Õµ¸ì(€€€€€€€¥˜€¡Ñ•áÑ}½±Õµ¸¤(€€€€€€€ì(€€€€€€€€€€€µ}Í½ÉÑ¥É•Ñ¥½¸€ôM½ÉÑ¥É•Ñ¥½¸èéÍ•¹‘¥¹œì(€€€€€€€ô(€€€€€€€•±Í”¥˜€¡Ñ½Ñ…±}½±Õµ¹}¥¹}Ñ½Ñ…±}Ù¥•Ü¤(€€€€€€€ì(€€€€€€€€€€€µ}Í½ÉÑ¥É•Ñ¥½¸€ôM½ÉÑ¥É•Ñ¥½¸èéÍ•¹‘¥¹œì(€€€€€€€ô(€€€€€€€•±Í”(€€€€€€€ì(€€€€€€€€€€€µ}Í½ÉÑ¥É•Ñ¥½¸€ôM½ÉÑ¥É•Ñ¥½¸èé•Í•¹‘¥¹œì(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸ì(€€€ô((€€€ÍÝ¥Ñ €¡µ}Í½ÉÑ¥É•Ñ¥½¸¤(€€€ì(€€€…Í”M½ÉÑ¥É•Ñ¥½¸èé9½¹”è(€€€€€€€µ}Í½ÉÑ¥É•Ñ¥½¸€ôÑ•áÑ}½±Õµ¸€üM½ÉÑ¥É•Ñ¥½¸èéÍ•¹‘¥¹œ€èM½ÉÑ¥É•Ñ¥½¸èé•Í•¹‘¥¹œì(€€€€€€€‰É•…¬ì(€€€…Í”M½ÉÑ¥É•Ñ¥½¸èéÍ•¹‘¥¹œè(€€€€€€€¥˜€¡Ñ•áÑ}½±Õµ¸¤(€€€€€€€ì(€€€€€€€€€€€µ}Í½ÉÑ¥É•Ñ¥½¸€ôM½ÉÑ¥É•Ñ¥½¸èé•Í•¹‘¥¹œì(€€€€€€€ô(€€€€€€€•±Í”¥˜€¡Ñ½Ñ…±}½±Õµ¹}¥¹}Ñ½Ñ…±}Ù¥•Ü¤(€€€€€€€ì(€€€€€€€€€€€µ}Í½ÉÑ¥É•Ñ¥½¸€ôM½ÉÑ¥É•Ñ¥½¸èé9½¹”ì(€€€€€€€€€€€µ}Í½ÉÑ½±Õµ¸€ô€´Äì(€€€€€€€ô(€€€€€€€•±Í”(€€€€€€€ì(€€€€€€€€€€€µ}Í½ÉÑ¥É•Ñ¥½¸€ôM½ÉÑ¥É•Ñ¥½¸èé9½¹”ì(€€€€€€€€€€€µ}Í½ÉÑ½±Õµ¸€ô€´Äì(€€€€€€€ô(€€€€€€€‰É•…¬ì(€€€…Í”M½ÉÑ¥É•Ñ¥½¸èé•Í•¹‘¥¹œè(€€€€€€€¥˜€¡Ñ•áÑ}½±Õµ¸¤(€€€€€€€ì(€€€€€€€€€€€µ}Í½ÉÑ¥É•Ñ¥½¸€ôM½ÉÑ¥É•Ñ¥½¸èé9½¹”ì(€€€€€€€€€€€µ}Í½ÉÑ½±Õµ¸€ô€´Äì(€€€€€€€ô(€€€€€€€•±Í”(€€€€€€€ì(€€€€€€€€€€€µ}Í½ÉÑ¥É•Ñ¥½¸€ôM½ÉÑ¥É•Ñ¥½¸èéÍ•¹‘¥¹œì(€€€€€€€ô(€€€€€€€‰É•…¬ì(€€€ô)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½ÜèéM½ÉÑÁÁÌ¡ÍÑèéÙ•Ñ½ÈñAÉ½9•ÑA±Õ¥¸èéÁÁQÉ…™™¥¹ÑÉäø˜…ÁÁÌ¤½¹ÍÐ)ì(€€€¥˜€¡µ}Í½ÉÑ¥É•Ñ¥½¸€ôôM½ÉÑ¥É•Ñ¥½¸èé9½¹”ñðµ}Í½ÉÑ½±Õµ¸€ðô€À¤(€€€ì(€€€€€€€¥˜€¡µ}Ù¥•Ý5½‘”€ôôY¥•Ý5½‘”èéQ½Ñ…°¤(€€€€€€€ì(€€€€€€€€€€€ÍÑèéÍ½ÉÐ¡…ÁÁÌ¹‰•¥¸ ¤°…ÁÁÌ¹•¹ ¤°mt¡½¹ÍÐAÉ½9•ÑA±Õ¥¸èéÁÁQÉ…™™¥¹ÑÉä˜±•™Ð°½¹ÍÐAÉ½9•ÑA±Õ¥¸èéÁÁQÉ…™™¥¹ÑÉä˜É¥¡Ð¤ì(€€€€€€€€€€€€€€€É•ÑÕÉ¸€¡±•™Ð¹ÉáQ½Ñ…±	åÑ•Ì€¬±•™Ð¹ÑáQ½Ñ…±	åÑ•Ì¤€ø€¡É¥¡Ð¹ÉáQ½Ñ…±	åÑ•Ì€¬É¥¡Ð¹ÑáQ½Ñ…±	åÑ•Ì¤ì(€€€€€€€€€€€ô¤ì(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸ì(€€€ô((€€€½¹ÍÐ‰½½°…Í•¹‘¥¹œ€ôµ}Í½ÉÑ¥É•Ñ¥½¸€ôôM½ÉÑ¥É•Ñ¥½¸èéÍ•¹‘¥¹œì(€€€ÍÑèéÍ½ÉÐ¡…ÁÁÌ¹‰•¥¸ ¤°…ÁÁÌ¹•¹ ¤°mÑ¡¥Ì°…Í•¹‘¥¹t¡½¹ÍÐAÉ½9•ÑA±Õ¥¸èéÁÁQÉ…™™¥¹ÑÉä˜±•™Ð°½¹ÍÐAÉ½9•ÑA±Õ¥¸èéÁÁQÉ…™™¥¹ÑÉä˜É¥¡Ð¤ì(€€€€€€€¥¹Ð½µÁ…É•}É•ÍÕ±Ð€ô€Àì(€€€€€€€¥˜€¡µ}Í½ÉÑ½±Õµ¸€ôô€Ä¤(€€€€€€€ì(€€€€€€€€€€€½µÁ…É•}É•ÍÕ±Ð€ô½µÁ…É•Q•áÐ¡9½Éµ…±¥é•¥ÍÁ±…å9…µ”¡±•™Ð¹•á•9…µ”¤°9½Éµ…±¥é•¥ÍÁ±…å9…µ”¡É¥¡Ð¹•á•9…µ”¤¤ì(€€€€€€€ô(€€€€€€€•±Í”¥˜€¡µ}Ù¥•Ý5½‘”€ôôY¥•Ý5½‘”èéI•…±Ñ¥µ”¤(€€€€€€€ì(€€€€€€€€€€€½¹ÍÐ…ÕÑ¼±•™Ñ}Ù…±Õ”€ô€¡µ}Í½ÉÑ½±Õµ¸€ôô€È¤€ü±•™Ð¹Éá	åÑ•ÍA•ÉM•Œ€è±•™Ð¹Ñá	åÑ•ÍA•ÉM•Œì(€€€€€€€€€€€½¹ÍÐ…ÕÑ¼É¥¡Ñ}Ù…±Õ”€ô€¡µ}Í½ÉÑ½±Õµ¸€ôô€È¤€üÉ¥¡Ð¹Éá	åÑ•ÍA•ÉM•Œ€èÉ¥¡Ð¹Ñá	åÑ•ÍA•ÉM•Œì(€€€€€€€€€€€½µÁ…É•}É•ÍÕ±Ð€ô±•™Ñ}Ù…±Õ”€ðÉ¥¡Ñ}Ù…±Õ”€ü€´Ä€è€¡±•™Ñ}Ù…±Õ”€øÉ¥¡Ñ}Ù…±Õ”€ü€Ä€è€À¤ì(€€€€€€€ô(€€€€€€€•±Í”(€€€€€€€ì(€€€€€€€€€€€ÍÑèéÕ¥¹ÐØÑ}Ð±•™Ñ}Ù…±Õ”€ô€Àì(€€€€€€€€€€€ÍÑèéÕ¥¹ÐØÑ}ÐÉ¥¡Ñ}Ù…±Õ”€ô€Àì(€€€€€€€€€€€¥˜€¡µ}Í½ÉÑ½±Õµ¸€ôô€È¤(€€€€€€€€€€€ì(€€€€€€€€€€€€€€€±•™Ñ}Ù…±Õ”€ô±•™Ð¹ÉáQ½Ñ…±	åÑ•Ìì(€€€€€€€€€€€€€€€É¥¡Ñ}Ù…±Õ”€ôÉ¥¡Ð¹ÉáQ½Ñ…±	åÑ•Ìì(€€€€€€€€€€€ô(€€€€€€€€€€€•±Í”¥˜€¡µ}Í½ÉÑ½±Õµ¸€ôô€Ì¤(€€€€€€€€€€€ì(€€€€€€€€€€€€€€€±•™Ñ}Ù…±Õ”€ô±•™Ð¹ÑáQ½Ñ…±	åÑ•Ìì(€€€€€€€€€€€€€€€É¥¡Ñ}Ù…±Õ”€ôÉ¥¡Ð¹ÑáQ½Ñ…±	åÑ•Ìì(€€€€€€€€€€€ô(€€€€€€€€€€€•±Í”(€€€€€€€€€€€ì(€€€€€€€€€€€€€€€±•™Ñ}Ù…±Õ”€ô±•™Ð¹ÉáQ½Ñ…±	åÑ•Ì€¬±•™Ð¹ÑáQ½Ñ…±	åÑ•Ìì(€€€€€€€€€€€€€€€É¥¡Ñ}Ù…±Õ”€ôÉ¥¡Ð¹ÉáQ½Ñ…±	åÑ•Ì€¬É¥¡Ð¹ÑáQ½Ñ…±	åÑ•Ìì(€€€€€€€€€€€ô(€€€€€€€€€€€½µÁ…É•}É•ÍÕ±Ð€ô±•™Ñ}Ù…±Õ”€ðÉ¥¡Ñ}Ù…±Õ”€ü€´Ä€è€¡±•™Ñ}Ù…±Õ”€øÉ¥¡Ñ}Ù…±Õ”€ü€Ä€è€À¤ì(€€€€€€€ô((€€€€€€€¥˜€¡½µÁ…É•}É•ÍÕ±Ð€ôô€À¤(€€€€€€€ì(€€€€€€€€€€€½µÁ…É•}É•ÍÕ±Ð€ô½µÁ…É•Q•áÐ¡9½Éµ…±¥é•¥ÍÁ±…å9…µ”¡±•™Ð¹•á•9…µ”¤°9½Éµ…±¥é•¥ÍÁ±…å9…µ”¡É¥¡Ð¹•á•9…µ”¤¤ì(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸…Í•¹‘¥¹œ€ü€¡½µÁ…É•}É•ÍÕ±Ð€ð€À¤€è€¡½µÁ…É•}É•ÍÕ±Ð€ø€À¤ì(€€€ô¤ì)ô()¥¹ÐQÉ…™™¥•Ñ…¥±]¥¹‘½Üèé½µÁ…É•Q•áÐ¡½¹ÍÐÍÑèéÝÍÑÉ¥¹œ˜±•™Ð°½¹ÍÐÍÑèéÝÍÑÉ¥¹œ˜É¥¡Ð¤)ì(€€€É•ÑÕÉ¸}ÝÍ¥µÀ¡±•™Ð¹}ÍÑÈ ¤°É¥¡Ð¹}ÍÑÈ ¤¤ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé1…å½ÕÑQ½Á½¹ÑÉ½±Ì¡¥¹ÐÝ¥‘Ñ ¤)ì(€€€½¹ÍÐ¥¹Ð±…¹Õ…•}±•™Ð€ô­5…É¥¸€¬­	ÕÑÑ½¹]¥‘Ñ €¬€ÄÈì(€€€½¹ÍÐ¥¹ÐÉ¥¡Ñ}‰ÕÑÑ½¹}à€ôÝ¥‘Ñ €´­5…É¥¸€´­	ÕÑÑ½¹]¥‘Ñ ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}Ñ½±•Y¥•Ý	ÕÑÑ½¸°­5…É¥¸°­5…É¥¸°­	ÕÑÑ½¹]¥‘Ñ °­	ÕÑÑ½¹!•¥¡Ð¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}±…¹Õ…•1…‰•°°±…¹Õ…•}±•™Ð°­5…É¥¸€¬€Ð°­1…¹Õ…•1…‰•±]¥‘Ñ °€ÈÀ¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}±…¹Õ…•½µ‰¼°±…¹Õ…•}±•™Ð€¬­1…¹Õ…•1…‰•±]¥‘Ñ °­5…É¥¸°­1…¹Õ…•½µ‰½]¥‘Ñ °€ÌÀÀ¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}Á…ÕÍ•I•™É•Í¡	ÕÑÑ½¸°É¥¡Ñ}‰ÕÑÑ½¹}à°­5…É¥¸°­	ÕÑÑ½¹]¥‘Ñ °­	ÕÑÑ½¹!•¥¡Ð¤ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé1…å½ÕÑ	½ÑÑ½µ½¹ÑÉ½±Ì¡¥¹ÐÝ¥‘Ñ °¥¹Ð¡•¥¡Ð¤)ì(€€€¥˜€¡µ}Ù¥•Ý5½‘”€ôôY¥•Ý5½‘”èéI•…±Ñ¥µ”¤(€€€ì(€€€€€€€É•ÑÕÉ¸ì(€€€ô((€€€½¹ÍÐ¥¹ÐÉ…¹•}‰±½­}Ñ½À€ô¡•¥¡Ð€´­5…É¥¸€´­MÕµµ…Éå!•¥¡Ðì(€€€½¹ÍÐ¥¹ÐÉ…¹•}‰±½­}±•™Ð€ô­5…É¥¸€¬­MÕµµ…Éå]¥‘Ñ €¬€ÄØì(€€€½¹ÍÐ¥¹ÐÁ¥­•É}±•™Ð€ôÉ…¹•}‰±½­}±•™Ð€¬­I…¹•1…‰•±]¥‘Ñ ì(€€€½¹ÍÐ¥¹ÐÅÕ¥­}‰ÕÑÑ½¹}±•™Ð€ôÝ¥‘Ñ €´­5…É¥¸€´­EÕ¥­	ÕÑÑ½¹]¥‘Ñ ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}ÍÕµµ…Éä°­5…É¥¸°É…¹•}‰±½­}Ñ½À°­MÕµµ…Éå]¥‘Ñ °­MÕµµ…Éå!•¥¡Ð¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}ÍÑ…ÉÑ1…‰•°°É…¹•}‰±½­}±•™Ð°É…¹•}‰±½­}Ñ½À€¬€Ð°­I…¹•1…‰•±]¥‘Ñ °€ÈÀ¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}ÍÑ…ÉÑ…Ñ•A¥­•È°Á¥­•É}±•™Ð°É…¹•}‰±½­}Ñ½À°­I…¹•…Ñ•]¥‘Ñ °€Èà¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}ÍÑ…ÉÑQ¥µ•A¥­•È°Á¥­•É}±•™Ð€¬­I…¹•…Ñ•]¥‘Ñ €¬€à°É…¹•}‰±½­}Ñ½À°­I…¹•Q¥µ•]¥‘Ñ °€Èà¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}•¹‘1…‰•°°É…¹•}‰±½­}±•™Ð°É…¹•}‰±½­}Ñ½À€¬­I…¹•I½ÝMÁ…¥¹œ€¬€Ð°­I…¹•1…‰•±]¥‘Ñ °€ÈÀ¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}•¹‘…Ñ•A¥­•È°Á¥­•É}±•™Ð°É…¹•}‰±½­}Ñ½À€¬­I…¹•I½ÝMÁ…¥¹œ°­I…¹•…Ñ•]¥‘Ñ °€Èà¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}•¹‘Q¥µ•A¥­•È°Á¥­•É}±•™Ð€¬­I…¹•…Ñ•]¥‘Ñ €¬€à°É…¹•}‰±½­}Ñ½À€¬­I…¹•I½ÝMÁ…¥¹œ°­I…¹•Q¥µ•]¥‘Ñ °€Èà¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}¡¥‘•A¥‘¡•¬°É…¹•}‰±½­}±•™Ð°É…¹•}‰±½­}Ñ½À€¬­I…¹•I½ÝMÁ…¥¹œ€¨€È€¬€È°€ÈÈÀ°­¡•­	½á!•¥¡Ð¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}‘…åI…¹•	ÕÑÑ½¸°ÅÕ¥­}‰ÕÑÑ½¹}±•™Ð°É…¹•}‰±½­}Ñ½À°­EÕ¥­	ÕÑÑ½¹]¥‘Ñ °­EÕ¥­	ÕÑÑ½¹!•¥¡Ð¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}Ý••­I…¹•	ÕÑÑ½¸°ÅÕ¥­}‰ÕÑÑ½¹}±•™Ð°É…¹•}‰±½­}Ñ½À€¬­I…¹•I½ÝMÁ…¥¹œ°­EÕ¥­	ÕÑÑ½¹]¥‘Ñ °­EÕ¥­	ÕÑÑ½¹!•¥¡Ð¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}µ½¹Ñ¡I…¹•	ÕÑÑ½¸°ÅÕ¥­}‰ÕÑÑ½¹}±•™Ð°É…¹•}‰±½­}Ñ½À€¬­I…¹•I½ÝMÁ…¥¹œ€¨€È°­EÕ¥­	ÕÑÑ½¹]¥‘Ñ °­EÕ¥­	ÕÑÑ½¹!•¥¡Ð¤ì(€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}å•…ÉI…¹•	ÕÑÑ½¸°ÅÕ¥­}‰ÕÑÑ½¹}±•™Ð°É…¹•}‰±½­}Ñ½À€¬­I…¹•I½ÝMÁ…¥¹œ€¨€Ì°­EÕ¥­	ÕÑÑ½¹]¥‘Ñ °­EÕ¥­	ÕÑÑ½¹!•¥¡Ð¤ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé1…å½ÕÑ1¥ÍÑ½¹ÑÉ½°¡¥¹ÐÝ¥‘Ñ °¥¹Ð¡•¥¡Ð¤)ì(€€€½¹ÍÐ¥¹Ð±¥ÍÑ}Ý¥‘Ñ €ôÝ¥‘Ñ €´­5…É¥¸€¨€Èì(€€€¥˜€¡µ}Ù¥•Ý5½‘”€ôôY¥•Ý5½‘”èéI•…±Ñ¥µ”¤(€€€ì(€€€€€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}±¥ÍÐ°­5…É¥¸°­Q½ÁÉ•…!•¥¡Ð°±¥ÍÑ}Ý¥‘Ñ °¡•¥¡Ð€´­Q½ÁÉ•…!•¥¡Ð€´­5…É¥¸¤ì(€€€€€€€É•ÑÕÉ¸ì(€€€ô((€€€5½Ù•½¹ÑÉ½±%™AÉ•Í•¹Ð¡µ}±¥ÍÐ°­5…É¥¸°­Q½ÁÉ•…!•¥¡Ð°±¥ÍÑ}Ý¥‘Ñ °¡•¥¡Ð€´­Q½ÁÉ•…!•¥¡Ð€´­MÕµµ…Éå!•¥¡Ð€´­5…É¥¸€¨€È¤ì)ô()‰½½°QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé%Í%¹Ñ•É…Ñ¥Ù•½¹ÑÉ½±Ñ¥Ù” ¤½¹ÍÐ)ì(€€€É•ÑÕÉ¸€¡µ}±…¹Õ…•½µ‰¼€„ô¹Õ±±ÁÑÈ€˜˜M•¹‘5•ÍÍ…•\¡µ}±…¹Õ…•½µ‰¼°	}QI=AAMQQ°€À°€À¤€„ô€À¤ñð(€€€€€€€•Ñ½ÕÌ ¤€ôôµ}ÍÑ…ÉÑ…Ñ•A¥­•Èñð(€€€€€€€•Ñ½ÕÌ ¤€ôôµ}ÍÑ…ÉÑQ¥µ•A¥­•Èñð(€€€€€€€•Ñ½ÕÌ ¤€ôôµ}•¹‘…Ñ•A¥­•Èñð(€€€€€€€•Ñ½ÕÌ ¤€ôôµ}•¹‘Q¥µ•A¥­•Èì)ô()!¥ÍÑ½ÉåQÉ…™™¥MÑ½É”èé…Ñ•Q¥µ•I…¹”QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé•ÑM•±•Ñ•‘I…¹” ¤½¹ÍÐ)ì(€€€…ÕÑ¼É…¹”€ôµ}Á±Õ¥¸¹•ÑAÉ•™•ÉÉ•‘I…¹” ¤ì(€€€ÁÁ±å…Ñ•É½µA¥­•È¡µ}ÍÑ…ÉÑ…Ñ•A¥­•È°É…¹”¹ÍÑ…ÉÐ¤ì(€€€ÁÁ±åQ¥µ•É½µA¥­•È¡µ}ÍÑ…ÉÑQ¥µ•A¥­•È°É…¹”¹ÍÑ…ÉÐ¤ì(€€€ÁÁ±å…Ñ•É½µA¥­•È¡µ}•¹‘…Ñ•A¥­•È°É…¹”¹•¹¤ì(€€€ÁÁ±åQ¥µ•É½µA¥­•È¡µ}•¹‘Q¥µ•A¥­•È°É…¹”¹•¹¤ì(€€€É…¹”¹ÍÑ…ÉÐ¹ÝM•½¹€ô€Àì(€€€É…¹”¹ÍÑ…ÉÐ¹Ý5¥±±¥Í•½¹‘Ì€ô€Àì(€€€É…¹”¹•¹¹ÝM•½¹€ô€Àì(€€€É…¹”¹•¹¹Ý5¥±±¥Í•½¹‘Ì€ô€Àì(€€€É•ÑÕÉ¸É…¹”ì)ô()!¥ÍÑ½ÉåQÉ…™™¥MÑ½É”èé¥ÍÁ±…å1…¹Õ…”QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé•ÑM•±•Ñ•‘1…¹Õ…” ¤½¹ÍÐ)ì(€€€¥˜€¡µ}±…¹Õ…•½µ‰¼€ôô¹Õ±±ÁÑÈ¤(€€€ì(€€€€€€€É•ÑÕÉ¸!¥ÍÑ½ÉåQÉ…™™¥MÑ½É”èé¥ÍÁ±…å1…¹Õ…”èé¹±¥Í ì(€€€ô((€€€É•ÑÕÉ¸½µ‰½	½á}•ÑÕÉM•°¡µ}±…¹Õ…•½µ‰¼¤€ôô€Ä(€€€€€€€€ü!¥ÍÑ½ÉåQÉ…™™¥MÑ½É”èé¥ÍÁ±…å1…¹Õ…”èé¡¥¹•Í”(€€€€€€€€è!¥ÍÑ½ÉåQÉ…™™¥MÑ½É”èé¥ÍÁ±…å1…¹Õ…”èé¹±¥Í ì)ô()‰½½°QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé!…¹‘±•½µµ…¹¡]=I½µµ…¹‘}¥°]=I¹½Ñ¥™å}½‘”¤)ì(€€€Q5A±Õ¥¹•Ñ…¥°èé%¹½É•U¹ÕÍ•¡¹½Ñ¥™å}½‘”¤ì((€€€¥˜€¡½µµ…¹‘}¥€ôô­Q½±•Y¥•Ý	ÕÑÑ½¹%¤(€€€ì(€€€€€€€Q½±•Y¥•Ü ¤ì(€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€ô(€€€¥˜€¡½µµ…¹‘}¥€ôô­A…ÕÍ•I•™É•Í¡	ÕÑÑ½¹%¤(€€€ì(€€€€€€€Q½±•I•™É•Í¡A…ÕÍ• ¤ì(€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€ô(€€€¥˜€¡½µµ…¹‘}¥€ôô­…åI…¹•	ÕÑÑ½¹%ñð½µµ…¹‘}¥€ôô­]••­I…¹•	ÕÑÑ½¹%ñð(€€€€€€€½µµ…¹‘}¥€ôô­5½¹Ñ¡I…¹•	ÕÑÑ½¹%ñð½µµ…¹‘}¥€ôô­e•…ÉI…¹•	ÕÑÑ½¹%¤(€€€ì(€€€€€€€ÁÁ±åEÕ¥­I…¹”¡½µµ…¹‘}¥¤ì(€€€€€€€I•™É•Í¡Y¥•Ü ¤ì(€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€ô(€€€¥˜€¡½µµ…¹‘}¥€ôô­1…¹Õ…•½µ‰½%€˜˜¹½Ñ¥™å}½‘”€ôô	9}M1!9¤(€€€ì(€€€€€€€µ}Á±Õ¥¸¹M•ÑAÉ•™•ÉÉ•‘1…¹Õ…”¡•ÑM•±•Ñ•‘1…¹Õ…” ¤¤ì(€€€€€€€I•™É•Í¡Y¥•Ü ¤ì(€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€ô(€€€¥˜€¡½µµ…¹‘}¥€ôô­!¥‘•A¥‘¡•­%¤(€€€ì(€€€€€€€µ}¡¥‘•¹½¹åµ½ÕÍA¥‘%Ñ•µÌ€ô€¡µ}¡¥‘•A¥‘¡•¬€„ô¹Õ±±ÁÑÈ€˜˜	ÕÑÑ½¹}•Ñ¡•¬¡µ}¡¥‘•A¥‘¡•¬¤€ôô	MQ}!-¤ì(€€€€€€€I•™É•Í¡Y¥•Ü ¤ì(€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€ô((€€€É•ÑÕÉ¸™…±Í”ì)ô()‰½½°QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé!…¹‘±•9½Ñ¥™ä¡95!H¨¡•…‘•È¤)ì(€€€¥˜€¡¡•…‘•È€ôô¹Õ±±ÁÑÈ¤(€€€ì(€€€€€€€É•ÑÕÉ¸™…±Í”ì(€€€ô((€€€¥˜€¡%ÍI…¹•½¹ÑÉ½±%¡¡•…‘•È´ù¥‘É½´¤€˜˜¡•…‘•È´ù½‘”€ôôQ9}QQ%5!9¤(€€€ì(€€€€€€€µ}Á±Õ¥¸¹M•ÑAÉ•™•ÉÉ•‘I…¹”¡•ÑM•±•Ñ•‘I…¹” ¤¤ì(€€€€€€€I•™É•Í¡Y¥•Ü ¤ì(€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€ô((€€€¥˜€¡µ}±¥ÍÐ€„ô¹Õ±±ÁÑÈ€˜˜(€€€€€€€¡•…‘•È´ù¡Ý¹‘É½´€ôô1¥ÍÑY¥•Ý}•Ñ!•…‘•È¡µ}±¥ÍÐ¤€˜˜(€€€€€€€¡•…‘•È´ù½‘”€ôô!9}9QI-\¤(€€€ì(€€€€€€€M…Ù•ÕÉÉ•¹Ñ½±Õµ¹]¥‘Ñ¡Ì ¤ì(€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€ô((€€€¥˜€¡¡•…‘•È´ù¥‘É½´€ôô­1¥ÍÑ%€˜˜¡•…‘•È´ù½‘”€ôô1Y9}=1U591%,¤(€€€ì(€€€€€€€½¹ÍÐ…ÕÑ¼¨¥¹™¼€ôÉ•¥¹Ñ•ÉÁÉ•Ñ}…ÍÐñ951%MQY%\¨ø¡¡•…‘•È¤ì(€€€€€€€UÁ‘…Ñ•M½ÉÑMÑ…Ñ”¡¥¹™¼´ù¥MÕ‰%Ñ•´¤ì(€€€€€€€I•™É•Í¡Y¥•Ü ¤ì(€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€ô((€€€É•ÑÕÉ¸™…±Í”ì)ô()‰½½°QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé!…¹‘±•I•™É•Í¡Q¥µ•È¡]AI4Ñ¥µ•É}¥¤)ì(€€€¥˜€¡Ñ¥µ•É}¥€„ô­I•™É•Í¡Q¥µ•É%ñðµ}É•™É•Í¡A…ÕÍ•ñðµ}Ù¥•Ý5½‘”€ôôY¥•Ý5½‘”èéQ½Ñ…°¤(€€€ì(€€€€€€€É•ÑÕÉ¸Ñ¥µ•É}¥€ôô­I•™É•Í¡Q¥µ•É%ì(€€€ô((€€€¥˜€¡%Í%¹Ñ•É…Ñ¥Ù•½¹ÑÉ½±Ñ¥Ù” ¤¤(€€€ì(€€€€€€€É•ÑÕÉ¸ÑÉÕ”ì(€€€ô((€€€I•™É•Í¡Y¥•Ü ¤ì(€€€É•ÑÕÉ¸ÑÉÕ”ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé=¹]¥¹‘½ÝÉ•…Ñ•¡!]9¡Ý¹¤)ì(€€€É•…Ñ•¡¥±‘½¹ÑÉ½±Ì¡¡Ý¹¤ì(€€€M•ÑQ¥µ•È¡¡Ý¹°­I•™É•Í¡Q¥µ•É%°€ÄÀÀÀ°¹Õ±±ÁÑÈ¤ì(€€€I•™É•Í¡Y¥•Ü ¤ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé=¹]¥¹‘½Ý•ÍÑÉ½å•¡!]9¡Ý¹¤)ì(€€€-¥±±Q¥µ•È¡¡Ý¹°­I•™É•Í¡Q¥µ•É%¤ì(€€€¥˜€¡µ}Íµ…±±%µ…•1¥ÍÐ€„ô¹Õ±±ÁÑÈ¤(€€€ì(€€€€€€€%µ…•1¥ÍÑ}•ÍÑÉ½ä¡µ}Íµ…±±%µ…•1¥ÍÐ¤ì(€€€€€€€µ}Íµ…±±%µ…•1¥ÍÐ€ô¹Õ±±ÁÑÈì(€€€ô(€€€µ}¥½¹%¹‘•á	å-•ä¹±•…È ¤ì(€€€µ}‘•™…Õ±Ñ%½¹%¹‘•à€ô€´Äì(€€€I•Í•Ñ½¹ÑÉ½±!…¹‘±•Ì ¤ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½Üèé!¥‘•]¥¹‘½Ü ¤)ì(€€€M…Ù•ÕÉÉ•¹Ñ½±Õµ¹]¥‘Ñ¡Ì ¤ì(€€€M¡½Ý]¥¹‘½Ü¡µ}¡Ý¹°M]}!%¤ì)ô()Ù½¥QÉ…™™¥•Ñ…¥±]¥¹‘½ÜèéI•Í•Ñ½¹ÑÉ½±!…¹‘±•Ì ¤)ì(€€€µ}¡Ý¹€ôµ}±¥ÍÐ€ôµ}Ñ½±•Y¥•Ý	ÕÑÑ½¸€ôµ}±…¹Õ…•1…‰•°€ôµ}±…¹Õ…•½µ‰¼€ô¹Õ±±ÁÑÈì(€€€µ}Á…ÕÍ•I•™É•Í¡	ÕÑÑ½¸€ôµ}ÍÑ…ÉÑ1…‰•°€ôµ}ÍÑ…ÉÑ…Ñ•A¥­•È€ôµ}ÍÑ…ÉÑQ¥µ•A¥­•È€ô¹Õ±±ÁÑÈì(€€€µ}•¹‘1…‰•°€ôµ}•¹‘…Ñ•A¥­•È€ôµ}•¹‘Q¥µ•A¥­•È€ôµ}¡¥‘•A¥‘¡•¬€ô¹Õ±±ÁÑÈì(€€€µ}‘…åI…¹•	ÕÑÑ½¸€ôµ}Ý••­I…¹•	ÕÑÑ½¸€ô¹Õ±±ÁÑÈì(€€€µ}µ½¹Ñ¡I…¹•	ÕÑÑ½¸€ôµ}å•…ÉI…¹•	ÕÑÑ½¸€ôµ}ÍÕµµ…Éä€ô¹Õ±±ÁÑÈì)ô()1IMU1PQÉ…™™¥•Ñ…¥±]¥¹‘½Üèé!…¹‘±•5•ÍÍ…”¡!]9¡Ý¹°U%9Pµ•ÍÍ…”°]AI4Ý}Á…É…´°1AI4±}Á…É…´¤)ì(€€€ÍÝ¥Ñ €¡µ•ÍÍ…”¤(€€€ì(€€€…Í”]5}IQè(€€€€€€€=¹]¥¹‘½ÝÉ•…Ñ•¡¡Ý¹¤ì(€€€€€€€É•ÑÕÉ¸€Àì(€€€…Í”]5}M%iè(€€€€€€€I•Í¥é•¡¥±‘É•¸¡1=]=I¡±}Á…É…´¤°!%]=I¡±}Á…É…´¤¤ì(€€€€€€€É•ÑÕÉ¸€Àì(€€€…Í”]5}Q%5Hè(€€€€€€€¥˜€¡!…¹‘±•I•™É•Í¡Q¥µ•È¡Ý}Á…É…´¤¤(€€€€€€€ì(€€€€€€€€€€€É•ÑÕÉ¸€Àì(€€€€€€€ô(€€€€€€€‰É•…¬ì(€€€…Í”]5}=559è(€€€€€€€¥˜€¡!…¹‘±•½µµ…¹¡1=]=I¡Ý}Á…É…´¤°!%]=I¡Ý}Á…É…´¤¤¤(€€€€€€€ì(€€€€€€€€€€€É•ÑÕÉ¸€Àì(€€€€€€€ô(€€€€€€€‰É•…¬ì(€€€…Í”]5}9=Q%dè(€€€€€€€¥˜€¡!…¹‘±•9½Ñ¥™ä¡É•¥¹Ñ•ÉÁÉ•Ñ}…ÍÐñ95!H¨ø¡±}Á…É…´¤¤¤(€€€€€€€ì(€€€€€€€€€€€É•ÑÕÉ¸€Àì(€€€€€€€ô(€€€€€€€‰É•…¬ì(€€€…Í”]5}Q1=1=IMQQ%è(€€€€€€€M•Ñ	­5½‘”¡É•¥¹Ñ•ÉÁÉ•Ñ}…ÍÐñ!ø¡Ý}Á…É…´¤°QI9MAI9P¤ì(€€€€€€€É•ÑÕÉ¸É•¥¹Ñ•ÉÁÉ•Ñ}…ÍÐñ1IMU1Pø¡•ÑMåÍ½±½É	ÉÕÍ ¡=1=I}]%9=\¤¤ì(€€€…Í”]5}1=Mè(€€€€€€€Q5A±Õ¥¹•Ñ…¥°èé%¹½É•U¹ÕÍ•¡¡Ý¹¤ì(€€€€€€€!¥‘•]¥¹‘½Ü ¤ì(€€€€€€€É•ÑÕÉ¸€Àì(€€€…Í”]5}MQI=dè(€€€€€€€=¹]¥¹‘½Ý•ÍÑÉ½å•¡¡Ý¹¤ì(€€€€€€€É•ÑÕÉ¸€Àì(€€€‘•™…Õ±Ðè(€€€€€€€‰É•…¬ì(€€€ô((€€€É•ÑÕÉ¸•™]¥¹‘½ÝAÉ½\¡¡Ý¹°µ•ÍÍ…”°Ý}Á…É…´°±}Á…É…´¤ì)ô()1IMU1P11	,QÉ…™™¥•Ñ…¥±]¥¹‘½ÜèéMÑ…Ñ¥]¹‘AÉ½Œ¡!]9¡Ý¹°U%9Pµ•ÍÍ…”°]AI4Ý}Á…É…´°1AI4±}Á…É…´¤)ì(€€€QÉ…™™¥•Ñ…¥±]¥¹‘½Ü¨Í•±˜€ô¹Õ±±ÁÑÈì(€€€¥˜€¡µ•ÍÍ…”€ôô]5}9IQ¤(€€€ì(€€€€€€€…ÕÑ¼¨É•…Ñ•}ÍÑÉÕÐ€ôÉ•¥¹Ñ•ÉÁÉ•Ñ}…ÍÐñIQMQIUQ\¨ø¡±}Á…É…´¤ì(€€€€€€€Í•±˜€ôÍÑ…Ñ¥}…ÍÐñQÉ…™™¥•Ñ…¥±]¥¹‘½Ü¨ø¡É•…Ñ•}ÍÑÉÕÐ´ù±ÁÉ•…Ñ•A…É…µÌ¤ì(€€€€€€€M•Ñ]¥¹‘½Ý1½¹AÑÉ\¡¡Ý¹°]1A}UMIQ°É•¥¹Ñ•ÉÁÉ•Ñ}…ÍÐñ1=9}AQHø¡Í•±˜¤¤ì(€€€€€€€Í•±˜´ùµ}¡Ý¹€ô¡Ý¹ì(€€€ô(€€€•±Í”(€€€ì(€€€€€€€Í•±˜€ôÉ•¥¹Ñ•ÉÁÉ•Ñ}…ÍÐñQÉ…™™¥•Ñ…¥±]¥¹‘½Ü¨ø¡•Ñ]¥¹‘½Ý1½¹AÑÉ\¡¡Ý¹°]1A}UMIQ¤¤ì(€€€ô((€€€¥˜€¡Í•±˜€„ô¹Õ±±ÁÑÈ¤(€€€ì(€€€€€€€É•ÑÕÉ¸Í•±˜´ù!…¹‘±•5•ÍÍ…”¡¡Ý¹°µ•ÍÍ…”°Ý}Á…É…´°±}Á…É…´¤ì(€€€ô((€€€É•ÑÕÉ¸•™]¥¹‘½ÝAÉ½\¡¡Ý¹°µ•ÍÍ…”°Ý}Á…É…´°±}Á…É…´¤ì)ô(
+    ListView_SetExtendedListViewStyle(m_list, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER | LVS_EX_HEADERDRAGDROP);
+    EnsureImageList();
+
+    m_summary = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | ES_LEFT | ES_MULTILINE | ES_READONLY,
+        kMargin, 450, 280, kSummaryHeight, hwnd,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSummaryId)), GetModuleHandleW(nullptr), nullptr);
+
+    ApplyCurrentRangeToControls();
+    ApplyRangeControls();
+    SetAllControlFonts();
+}
+
+void CTrafficDetailWindow::SetAllControlFonts() const
+{
+    const auto font = reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT));
+    const HWND controls[] = {
+        m_toggleViewButton, m_languageLabel, m_languageCombo, m_pauseRefreshButton,
+        m_startLabel, m_startDatePicker, m_startTimePicker, m_endLabel, m_endDatePicker,
+        m_endTimePicker, m_hidePidCheck, m_dayRangeButton, m_weekRangeButton,
+        m_monthRangeButton, m_yearRangeButton, m_list, m_summary
+    };
+
+    for (HWND control : controls)
+    {
+        if (control != nullptr)
+        {
+            SendMessageW(control, WM_SETFONT, font, TRUE);
+        }
+    }
+}
+
+void CTrafficDetailWindow::RefreshView()
+{
+    if (m_list == nullptr)
+    {
+        return;
+    }
+
+    const int top_index = ListView_GetTopIndex(m_list);
+    const int selected_index = ListView_GetNextItem(m_list, -1, LVNI_SELECTED);
+
+    RECT top_item_rect{};
+    bool has_top_rect = false;
+    if (top_index >= 0)
+    {
+        has_top_rect = ListView_GetItemRect(m_list, top_index, &top_item_rect, LVIR_BOUNDS) != FALSE;
+    }
+
+    SendMessageW(m_list, WM_SETREDRAW, FALSE, 0);
+
+    ApplyLanguageTexts();
+    EnsureColumnsForCurrentView();
+    UpdateViewSpecificControls();
+
+    const int item_count = ListView_GetItemCount(m_list);
+    if (selected_index >= 0 && selected_index < item_count)
+    {
+        ListView_SetItemState(m_list, selected_index, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    }
+
+    if (top_index >= 0 && top_index < item_count)
+    {
+        ListView_EnsureVisible(m_list, top_index, FALSE);
+
+        if (has_top_rect)
+        {
+            RECT restored_top_item_rect{};
+            if (ListView_GetItemRect(m_list, top_index, &restored_top_item_rect, LVIR_BOUNDS) != FALSE)
+            {
+                const int delta_y = restored_top_item_rect.top - top_item_rect.top;
+                if (delta_y != 0)
+                {
+                    ListView_Scroll(m_list, 0, delta_y);
+                }
+            }
+        }
+    }
+
+    SendMessageW(m_list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(m_list, nullptr, TRUE);
+    UpdateWindow(m_list);
+
+    UpdateWindowTitle();
+    UpdateButtonText();
+
+    RECT rect{};
+    GetClientRect(m_hwnd, &rect);
+    ResizeChildren(rect.right - rect.left, rect.bottom - rect.top);
+}
+
+void CTrafficDetailWindow::ToggleView()
+{
+    SaveCurrentColumnWidths();
+    m_viewMode = (m_viewMode == ViewMode::Realtime) ? ViewMode::Total : ViewMode::Realtime;
+    m_sortColumn = -1;
+    m_sortDirection = SortDirection::None;
+    RefreshView();
+}
+
+void CTrafficDetailWindow::ToggleRefreshPaused()
+{
+    m_refreshPaused = !m_refreshPaused;
+    UpdateButtonText();
+}
+
+void CTrafficDetailWindow::ApplyLanguageTexts()
+{
+    const auto language = GetSelectedLanguage();
+    SetWindowTextIfPresent(m_languageLabel, GetLocalizedText(language, { L"Language:", L"è¯­è¨€:" }));
+    SetWindowTextIfPresent(m_startLabel, GetLocalizedText(language, { L"Start:", L"å¼€å§‹æ—¶é—´:" }));
+    SetWindowTextIfPresent(m_endLabel, GetLocalizedText(language, { L"End:", L"ç»“æŸæ—¶é—´:" }));
+    SetWindowTextIfPresent(m_hidePidCheck, GetLocalizedText(language, { L"Hide anonymous PID items", L"éšè—åŒ¿å PID é¡¹" }));
+    SetWindowTextIfPresent(m_dayRangeButton, GetLocalizedText(language, { L"Day", L"æ—¥" }));
+    SetWindowTextIfPresent(m_weekRangeButton, GetLocalizedText(language, { L"Week", L"å‘¨" }));
+    SetWindowTextIfPresent(m_monthRangeButton, GetLocalizedText(language, { L"Month", L"æœˆ" }));
+    SetWindowTextIfPresent(m_yearRangeButton, GetLocalizedText(language, { L"Year", L"å¹´" }));
+
+    if (m_languageCombo != nullptr)
+    {
+        const int selected = static_cast<int>(language);
+        if (ComboBox_GetCurSel(m_languageCombo) != selected)
+        {
+            ComboBox_SetCurSel(m_languageCombo, selected);
+        }
+    }
+
+    ApplyRangeControls();
+}
+
+void CTrafficDetailWindow::ApplyQuickRange(int button_id)
+{
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+
+    CHistoryTrafficStore::DateTimeRange range{};
+    range.start = now;
+    range.end = now;
+    range.start.wSecond = 0;
+    range.start.wMilliseconds = 0;
+    range.end.wSecond = 0;
+    range.end.wMilliseconds = 0;
+
+    if (button_id == kDayRangeButtonId)
+    {
+        range.start.wHour = 0;
+        range.start.wMinute = 0;
+    }
+    else if (button_id == kWeekRangeButtonId)
+    {
+        const unsigned int days_since_monday = (static_cast<unsigned int>(now.wDayOfWeek) + 6U) % 7U;
+        MoveSystemTimeBackDays(range.start, days_since_monday);
+        range.start.wHour = 0;
+        range.start.wMinute = 0;
+    }
+    else if (button_id == kMonthRangeButtonId)
+    {
+        range.start.wDay = 1;
+        range.start.wHour = 0;
+        range.start.wMinute = 0;
+    }
+    else if (button_id == kYearRangeButtonId)
+    {
+        range.start.wMonth = 1;
+        range.start.wDay = 1;
+        range.start.wHour = 0;
+        range.start.wMinute = 0;
+    }
+    else
+    {
+        return;
+    }
+
+    m_plugin.SetPreferredRange(range);
+    ApplyCurrentRangeToControls();
+}
+
+void CTrafficDetailWindow::ApplyCurrentRangeToControls()
+{
+    const auto range = m_plugin.GetPreferredRange();
+    SetPickerTimeIfPresent(m_startDatePicker, range.start);
+    SetPickerTimeIfPresent(m_startTimePicker, range.start);
+    SetPickerTimeIfPresent(m_endDatePicker, range.end);
+    SetPickerTimeIfPresent(m_endTimePicker, range.end);
+}
+
+void CTrafficDetailWindow::ShowTotalViewControls(bool show)
+{
+    const int command = show ? SW_SHOW : SW_HIDE;
+    const HWND controls[] = {
+        m_startLabel, m_startDatePicker, m_startTimePicker, m_endLabel,
+        m_endDatePicker, m_endTimePicker, m_hidePidCheck, m_dayRangeButton,
+        m_weekRangeButton, m_monthRangeButton, m_yearRangeButton
+    };
+
+    for (HWND control : controls)
+    {
+        if (control != nullptr)
+        {
+            ShowWindow(control, command);
+        }
+    }
+}
+
+void CTrafficDetailWindow::ShowPauseRefreshButton(bool show)
+{
+    if (m_pauseRefreshButton != nullptr)
+    {
+        ShowWindow(m_pauseRefreshButton, show ? SW_SHOW : SW_HIDE);
+    }
+}
+
+void CTrafficDetailWindow::UpdateViewSpecificControls()
+{
+    if (m_viewMode == ViewMode::Realtime)
+    {
+        FillRealtimeView();
+        SetWindowTextIfPresent(m_summary, L"");
+        if (m_summary != nullptr)
+        {
+            ShowWindow(m_summary, SW_HIDE);
+        }
+        ShowTotalViewControls(false);
+        ShowPauseRefreshButton(true);
+        return;
+    }
+
+    FillTotalView();
+    SetWindowTextIfPresent(m_summary, m_plugin.BuildTotalsText(GetSelectedRange(), GetSelectedLanguage()).c_str());
+    if (m_summary != nullptr)
+    {
+        ShowWindow(m_summary, SW_SHOW);
+    }
+    ShowTotalViewControls(true);
+    ShowPauseRefreshButton(false);
+}
+
+void CTrafficDetailWindow::UpdateWindowTitle()
+{
+    SetWindowTextIfPresent(m_hwnd, GetLocalizedText(GetSelectedLanguage(), GetWindowTitle(m_viewMode == ViewMode::Realtime)));
+}
+
+void CTrafficDetailWindow::UpdateButtonText()
+{
+    const auto language = GetSelectedLanguage();
+    SetWindowTextIfPresent(m_toggleViewButton, GetLocalizedText(language, GetToggleButtonText(m_viewMode == ViewMode::Realtime)));
+    SetWindowTextIfPresent(m_pauseRefreshButton, GetLocalizedText(language, GetPauseButtonText(m_refreshPaused)));
+}
+
+void CTrafficDetailWindow::ApplyRangeControls()
+{
+    if (m_startDatePicker != nullptr)
+    {
+        DateTime_SetFormat(m_startDatePicker, L"yyyy-MM-dd");
+    }
+    if (m_startTimePicker != nullptr)
+    {
+        DateTime_SetFormat(m_startTimePicker, L"HH:mm");
+    }
+    if (m_endDatePicker != nullptr)
+    {
+        DateTime_SetFormat(m_endDatePicker, L"yyyy-MM-dd");
+    }
+    if (m_endTimePicker != nullptr)
+    {
+        DateTime_SetFormat(m_endTimePicker, L"HH:mm");
+    }
+}
+
+void CTrafficDetailWindow::EnsureColumnsForCurrentView()
+{
+    const auto language = GetSelectedLanguage();
+    if (m_lastBuiltView == m_viewMode &&
+        m_lastBuiltLanguage == language &&
+        Header_GetItemCount(ListView_GetHeader(m_list)) > 0)
+    {
+        return;
+    }
+
+    RebuildColumnsForView(m_viewMode);
+    m_lastBuiltView = m_viewMode;
+    m_lastBuiltLanguage = language;
+}
+
+void CTrafficDetailWindow::RebuildColumnsForView(ViewMode view_mode)
+{
+    const auto language = GetSelectedLanguage();
+    while (Header_GetItemCount(ListView_GetHeader(m_list)) > 0)
+    {
+        ListView_DeleteColumn(m_list, 0);
+    }
+
+    if (view_mode == ViewMode::Realtime)
+    {
+        for (size_t i = 0; i < kRealtimeColumns.size(); ++i)
+        {
+            const auto title = GetColumnTitleText(static_cast<int>(i), GetLocalizedText(language, kRealtimeColumns[i].title));
+            AddColumn(
+                m_list,
+                static_cast<int>(i),
+                m_realtimeColumnWidths[i],
+                title.c_str(),
+                kRealtimeColumns[i].format);
+        }
+    }
+    else
+    {
+        for (size_t i = 0; i < kTotalColumns.size(); ++i)
+        {
+            const auto title = GetColumnTitleText(static_cast<int>(i), GetLocalizedText(language, kTotalColumns[i].title));
+            AddColumn(
+                m_list,
+                static_cast<int>(i),
+                m_totalColumnWidths[i],
+                title.c_str(),
+                kTotalColumns[i].format);
+        }
+    }
+}
+
+std::wstring CTrafficDetailWindow::GetColumnTitleText(int column_index, const wchar_t* base_title) const
+{
+    std::wstring title = base_title != nullptr ? base_title : L"";
+    if (column_index <= 0 || m_sortColumn != column_index)
+    {
+        return title;
+    }
+
+    if (m_sortDirection == SortDirection::Ascending)
+    {
+        title += L" â†‘";
+    }
+    else if (m_sortDirection == SortDirection::Descending)
+    {
+        title += L" â†“";
+    }
+    return title;
+}
+
+void CTrafficDetailWindow::SaveCurrentColumnWidths()
+{
+    if (m_list == nullptr)
+    {
+        return;
+    }
+
+    const int count = Header_GetItemCount(ListView_GetHeader(m_list));
+    if (m_viewMode == ViewMode::Realtime && count == static_cast<int>(m_realtimeColumnWidths.size()))
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            m_realtimeColumnWidths[static_cast<size_t>(i)] = ListView_GetColumnWidth(m_list, i);
+        }
+    }
+    else if (m_viewMode == ViewMode::Total && count == static_cast<int>(m_totalColumnWidths.size()))
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            m_totalColumnWidths[static_cast<size_t>(i)] = ListView_GetColumnWidth(m_list, i);
+        }
+    }
+}
+
+void CTrafficDetailWindow::FillRealtimeView()
+{
+    auto apps = m_plugin.BuildAllApps();
+    SortApps(apps);
+    EnsureListItemCount(static_cast<int>(apps.size()));
+    for (size_t i = 0; i < apps.size(); ++i)
+    {
+        UpsertListRow(static_cast<int>(i), GetIconIndex(apps[i].exeName, apps[i].exePath), BuildRealtimeRow(apps[i]));
+    }
+}
+
+void CTrafficDetailWindow::FillTotalView()
+{
+    auto apps = m_plugin.BuildHistoryApps(GetSelectedRange());
+    if (m_hideAnonymousPidItems)
+    {
+        apps.erase(std::remove_if(apps.begin(), apps.end(), [](const CProcNetPlugin::AppTrafficEntry& app) {
+            return IsAnonymousPidName(app.exeName);
+        }), apps.end());
+    }
+    SortApps(apps);
+
+    EnsureListItemCount(static_cast<int>(apps.size()));
+    for (size_t i = 0; i < apps.size(); ++i)
+    {
+        UpsertListRow(static_cast<int>(i), GetIconIndex(apps[i].exeName, apps[i].exePath), BuildTotalRow(apps[i]));
+    }
+}
+
+void CTrafficDetailWindow::EnsureListItemCount(int item_count)
+{
+    const int current_count = ListView_GetItemCount(m_list);
+    if (current_count < item_count)
+    {
+        for (int i = current_count; i < item_count; ++i)
+        {
+            LVITEMW item{};
+            item.mask = LVIF_TEXT;
+            item.iItem = i;
+            item.pszText = const_cast<LPWSTR>(L"");
+            ListView_InsertItem(m_list, &item);
+        }
+    }
+    else if (current_count > item_count)
+    {
+        for (int i = current_count - 1; i >= item_count; --i)
+        {
+            ListView_DeleteItem(m_list, i);
+        }
+    }
+}
+
+void CTrafficDetailWindow::UpsertListRow(int row, int image_index, const std::vector<std::wstring>& columns)
+{
+    if (row < 0 || columns.empty())
+    {
+        return;
+    }
+
+    LVITEMW item{};
+    item.mask = LVIF_IMAGE;
+    item.iItem = row;
+    item.iSubItem = 0;
+    item.iImage = image_index >= 0 ? image_index : m_defaultIconIndex;
+    ListView_SetItem(m_list, &item);
+    SetListText(row, 0, L"");
+
+    SetListText(row, 1, columns[0].c_str());
+    for (size_t column = 1; column < columns.size(); ++column)
+    {
+        SetListText(row, static_cast<int>(column + 1), columns[column].c_str());
+    }
+}
+
+int CTrafficDetailWindow::GetIconIndex(const std::wstring& exe_name, const std::wstring& exe_path)
+{
+    EnsureImageList();
+
+    const std::wstring cache_key = exe_path.empty() ? exe_name : exe_path;
+    const auto it = m_iconIndexByKey.find(cache_key);
+    if (it != m_iconIndexByKey.end())
+    {
+        return it->second;
+    }
+
+    HICON icon = LoadSmallExeIcon(exe_path);
+    if (icon == nullptr && !exe_name.empty())
+    {
+        icon = LoadSmallExeIcon(CProcessFinder::FindFirstProcessPathByExeName(exe_name));
+    }
+
+    int image_index = m_defaultIconIndex;
+    if (icon != nullptr)
+    {
+        image_index = AddIconToImageList(icon);
+    }
+
+    m_iconIndexByKey.emplace(cache_key, image_index);
+    return image_index;
+}
+
+int CTrafficDetailWindow::AddIconToImageList(HICON icon)
+{
+    if (icon == nullptr)
+    {
+        return -1;
+    }
+
+    const int image_index = m_smallImageList != nullptr ? ImageList_AddIcon(m_smallImageList, icon) : -1;
+    DestroyIcon(icon);
+    return image_index;
+}
+
+HICON CTrafficDetailWindow::LoadSmallExeIcon(const std::wstring& exe_path) const
+{
+    if (exe_path.empty())
+    {
+        return nullptr;
+    }
+
+    SHFILEINFOW file_info{};
+    if (SHGetFileInfoW(exe_path.c_str(), FILE_ATTRIBUTE_NORMAL, &file_info, sizeof(file_info),
+        SHGFI_ICON | SHGFI_SMALLICON) == 0)
+    {
+        return nullptr;
+    }
+
+    return file_info.hIcon;
+}
+
+HICON CTrafficDetailWindow::LoadDefaultExeIcon() const
+{
+    SHFILEINFOW file_info{};
+    if (SHGetFileInfoW(L".exe", FILE_ATTRIBUTE_NORMAL, &file_info, sizeof(file_info),
+        SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_SMALLICON) == 0)
+    {
+        return nullptr;
+    }
+
+    return file_info.hIcon;
+}
+
+void CTrafficDetailWindow::ResizeChildren(int width, int height)
+{
+    LayoutTopControls(width);
+    LayoutBottomControls(width, height);
+    LayoutListControl(width, height);
+}
+
+void CTrafficDetailWindow::ClearList()
+{
+    ListView_DeleteAllItems(m_list);
+}
+
+void CTrafficDetailWindow::SetListText(int row, int column, const wchar_t* text)
+{
+    ListView_SetItemText(m_list, row, column, const_cast<LPWSTR>(text));
+}
+
+void CTrafficDetailWindow::SetWindowTextIfPresent(HWND control, const wchar_t* text) const
+{
+    if (control != nullptr)
+    {
+        SetWindowTextW(control, text);
+    }
+}
+
+void CTrafficDetailWindow::UpdateSortState(int clicked_column)
+{
+    if (clicked_column <= 0)
+    {
+        return;
+    }
+
+    const bool text_column = clicked_column == 1;
+    const bool total_column_in_total_view = (m_viewMode == ViewMode::Total && clicked_column == 4);
+
+    if (m_sortColumn != clicked_column)
+    {
+        m_sortColumn = clicked_column;
+        if (text_column)
+        {
+            m_sortDirection = SortDirection::Ascending;
+        }
+        else if (total_column_in_total_view)
+        {
+            m_sortDirection = SortDirection::Ascending;
+        }
+        else
+        {
+            m_sortDirection = SortDirection::Descending;
+        }
+        return;
+    }
+
+    switch (m_sortDirection)
+    {
+    case SortDirection::None:
+        m_sortDirection = text_column ? SortDirection::Ascending : SortDirection::Descending;
+        break;
+    case SortDirection::Ascending:
+        if (text_column)
+        {
+            m_sortDirection = SortDirection::Descending;
+        }
+        else if (total_column_in_total_view)
+        {
+            m_sortDirection = SortDirection::None;
+            m_sortColumn = -1;
+        }
+        else
+        {
+            m_sortDirection = SortDirection::None;
+            m_sortColumn = -1;
+        }
+        break;
+    case SortDirection::Descending:
+        if (text_column)
+        {
+            m_sortDirection = SortDirection::None;
+            m_sortColumn = -1;
+        }
+        else
+        {
+            m_sortDirection = SortDirection::Ascending;
+        }
+        break;
+    }
+}
+
+void CTrafficDetailWindow::SortApps(std::vector<CProcNetPlugin::AppTrafficEntry>& apps) const
+{
+    if (m_sortDirection == SortDirection::None || m_sortColumn <= 0)
+    {
+        if (m_viewMode == ViewMode::Total)
+        {
+            std::sort(apps.begin(), apps.end(), [](const CProcNetPlugin::AppTrafficEntry& left, const CProcNetPlugin::AppTrafficEntry& right) {
+                return (left.rxTotalBytes + left.txTotalBytes) > (right.rxTotalBytes + right.txTotalBytes);
+            });
+        }
+        return;
+    }
+
+    const bool ascending = m_sortDirection == SortDirection::Ascending;
+    std::sort(apps.begin(), apps.end(), [this, ascending](const CProcNetPlugin::AppTrafficEntry& left, const CProcNetPlugin::AppTrafficEntry& right) {
+        int compare_result = 0;
+        if (m_sortColumn == 1)
+        {
+            compare_result = CompareText(NormalizeDisplayName(left.exeName), NormalizeDisplayName(right.exeName));
+        }
+        else if (m_viewMode == ViewMode::Realtime)
+        {
+            const auto left_value = (m_sortColumn == 2) ? left.rxBytesPerSec : left.txBytesPerSec;
+            const auto right_value = (m_sortColumn == 2) ? right.rxBytesPerSec : right.txBytesPerSec;
+            compare_result = left_value < right_value ? -1 : (left_value > right_value ? 1 : 0);
+        }
+        else
+        {
+            std::uint64_t left_value = 0;
+            std::uint64_t right_value = 0;
+            if (m_sortColumn == 2)
+            {
+                left_value = left.rxTotalBytes;
+                right_value = right.rxTotalBytes;
+            }
+            else if (m_sortColumn == 3)
+            {
+                left_value = left.txTotalBytes;
+                right_value = right.txTotalBytes;
+            }
+            else
+            {
+                left_value = left.rxTotalBytes + left.txTotalBytes;
+                right_value = right.rxTotalBytes + right.txTotalBytes;
+            }
+            compare_result = left_value < right_value ? -1 : (left_value > right_value ? 1 : 0);
+        }
+
+        if (compare_result == 0)
+        {
+            compare_result = CompareText(NormalizeDisplayName(left.exeName), NormalizeDisplayName(right.exeName));
+        }
+        return ascending ? (compare_result < 0) : (compare_result > 0);
+    });
+}
+
+int CTrafficDetailWindow::CompareText(const std::wstring& left, const std::wstring& right)
+{
+    return _wcsicmp(left.c_str(), right.c_str());
+}
+
+void CTrafficDetailWindow::LayoutTopControls(int width)
+{
+    const int language_left = kMargin + kButtonWidth + 12;
+    const int right_button_x = width - kMargin - kButtonWidth;
+    MoveControlIfPresent(m_toggleViewButton, kMargin, kMargin, kButtonWidth, kButtonHeight);
+    MoveControlIfPresent(m_languageLabel, language_left, kMargin + 4, kLanguageLabelWidth, 20);
+    MoveControlIfPresent(m_languageCombo, language_left + kLanguageLabelWidth, kMargin, kLanguageComboWidth, 300);
+    MoveControlIfPresent(m_pauseRefreshButton, right_button_x, kMargin, kButtonWidth, kButtonHeight);
+}
+
+void CTrafficDetailWindow::LayoutBottomControls(int width, int height)
+{
+    if (m_viewMode == ViewMode::Realtime)
+    {
+        return;
+    }
+
+    const int range_block_top = height - kMargin - kSummaryHeight;
+    const int range_block_left = kMargin + kSummaryWidth + 16;
+    const int picker_left = range_block_left + kRangeLabelWidth;
+    const int quick_button_left = width - kMargin - kQuickButtonWidth;
+    MoveControlIfPresent(m_summary, kMargin, range_block_top, kSummaryWidth, kSummaryHeight);
+    MoveControlIfPresent(m_startLabel, range_block_left, range_block_top + 4, kRangeLabelWidth, 20);
+    MoveControlIfPresent(m_startDatePicker, picker_left, range_block_top, kRangeDateWidth, 28);
+    MoveControlIfPresent(m_startTimePicker, picker_left + kRangeDateWidth + 8, range_block_top, kRangeTimeWidth, 28);
+    MoveControlIfPresent(m_endLabel, range_block_left, range_block_top + kRangeRowSpacing + 4, kRangeLabelWidth, 20);
+    MoveControlIfPresent(m_endDatePicker, picker_left, range_block_top + kRangeRowSpacing, kRangeDateWidth, 28);
+    MoveControlIfPresent(m_endTimePicker, picker_left + kRangeDateWidth + 8, range_block_top + kRangeRowSpacing, kRangeTimeWidth, 28);
+    MoveControlIfPresent(m_hidePidCheck, range_block_left, range_block_top + kRangeRowSpacing * 2 + 2, 220, kCheckBoxHeight);
+    MoveControlIfPresent(m_dayRangeButton, quick_button_left, range_block_top, kQuickButtonWidth, kQuickButtonHeight);
+    MoveControlIfPresent(m_weekRangeButton, quick_button_left, range_block_top + kRangeRowSpacing, kQuickButtonWidth, kQuickButtonHeight);
+    MoveControlIfPresent(m_monthRangeButton, quick_button_left, range_block_top + kRangeRowSpacing * 2, kQuickButtonWidth, kQuickButtonHeight);
+    MoveControlIfPresent(m_yearRangeButton, quick_button_left, range_block_top + kRangeRowSpacing * 3, kQuickButtonWidth, kQuickButtonHeight);
+}
+
+void CTrafficDetailWindow::LayoutListControl(int width, int height)
+{
+    const int list_width = width - kMargin * 2;
+    if (m_viewMode == ViewMode::Realtime)
+    {
+        MoveControlIfPresent(m_list, kMargin, kTopAreaHeight, list_width, height - kTopAreaHeight - kMargin);
+        return;
+    }
+
+    MoveControlIfPresent(m_list, kMargin, kTopAreaHeight, list_width, height - kTopAreaHeight - kSummaryHeight - kMargin * 2);
+}
+
+bool CTrafficDetailWindow::IsInteractiveControlActive() const
+{
+    return (m_languageCombo != nullptr && SendMessageW(m_languageCombo, CB_GETDROPPEDSTATE, 0, 0) != 0) ||
+        GetFocus() == m_startDatePicker ||
+        GetFocus() == m_startTimePicker ||
+        GetFocus() == m_endDatePicker ||
+        GetFocus() == m_endTimePicker;
+}
+
+CHistoryTrafficStore::DateTimeRange CTrafficDetailWindow::GetSelectedRange() const
+{
+    auto range = m_plugin.GetPreferredRange();
+    ApplyDateFromPicker(m_startDatePicker, range.start);
+    ApplyTimeFromPicker(m_startTimePicker, range.start);
+    ApplyDateFromPicker(m_endDatePicker, range.end);
+    ApplyTimeFromPicker(m_endTimePicker, range.end);
+    range.start.wSecond = 0;
+    range.start.wMilliseconds = 0;
+    range.end.wSecond = 0;
+    range.end.wMilliseconds = 0;
+    return range;
+}
+
+CHistoryTrafficStore::DisplayLanguage CTrafficDetailWindow::GetSelectedLanguage() const
+{
+    if (m_languageCombo == nullptr)
+    {
+        return CHistoryTrafficStore::DisplayLanguage::English;
+    }
+
+    return ComboBox_GetCurSel(m_languageCombo) == 1
+        ? CHistoryTrafficStore::DisplayLanguage::Chinese
+        : CHistoryTrafficStore::DisplayLanguage::English;
+}
+
+bool CTrafficDetailWindow::HandleCommand(WORD command_id, WORD notify_code)
+{
+    TMPluginDetail::IgnoreUnused(notify_code);
+
+    if (command_id == kToggleViewButtonId)
+    {
+        ToggleView();
+        return true;
+    }
+    if (command_id == kPauseRefreshButtonId)
+    {
+        ToggleRefreshPaused();
+        return true;
+    }
+    if (command_id == kDayRangeButtonId || command_id == kWeekRangeButtonId ||
+        command_id == kMonthRangeButtonId || command_id == kYearRangeButtonId)
+    {
+        ApplyQuickRange(command_id);
+        RefreshView();
+        return true;
+    }
+    if (command_id == kLanguageComboId && notify_code == CBN_SELCHANGE)
+    {
+        m_plugin.SetPreferredLanguage(GetSelectedLanguage());
+        RefreshView();
+        return true;
+    }
+    if (command_id == kHidePidCheckId)
+    {
+        m_hideAnonymousPidItems = (m_hidePidCheck != nullptr && Button_GetCheck(m_hidePidCheck) == BST_CHECKED);
+        RefreshView();
+        return true;
+    }
+
+    return false;
+}
+
+bool CTrafficDetailWindow::HandleNotify(NMHDR* header)
+{
+    if (header == nullptr)
+    {
+        return false;
+    }
+
+    if (IsRangeControlId(header->idFrom) && header->code == DTN_DATETIMECHANGE)
+    {
+        m_plugin.SetPreferredRange(GetSelectedRange());
+        RefreshView();
+        return true;
+    }
+
+    if (m_list != nullptr &&
+        header->hwndFrom == ListView_GetHeader(m_list) &&
+        header->code == HDN_ENDTRACKW)
+    {
+        SaveCurrentColumnWidths();
+        return true;
+    }
+
+    if (header->idFrom == kListId && header->code == LVN_COLUMNCLICK)
+    {
+        const auto* info = reinterpret_cast<NMLISTVIEW*>(header);
+        UpdateSortState(info->iSubItem);
+        RefreshView();
+        return true;
+    }
+
+    return false;
+}
+
+bool CTrafficDetailWindow::HandleRefreshTimer(WPARAM timer_id)
+{
+    if (timer_id != kRefreshTimerId || m_refreshPaused || m_viewMode == ViewMode::Total)
+    {
+        return timer_id == kRefreshTimerId;
+    }
+
+    if (IsInteractiveControlActive())
+    {
+        return true;
+    }
+
+    RefreshView();
+    return true;
+}
+
+void CTrafficDetailWindow::OnWindowCreated(HWND hwnd)
+{
+    CreateChildControls(hwnd);
+    SetTimer(hwnd, kRefreshTimerId, 1000, nullptr);
+    RefreshView();
+}
+
+void CTrafficDetailWindow::OnWindowDestroyed(HWND hwnd)
+{
+    KillTimer(hwnd, kRefreshTimerId);
+    if (m_smallImageList != nullptr)
+    {
+        ImageList_Destroy(m_smallImageList);
+        m_smallImageList = nullptr;
+    }
+    m_iconIndexByKey.clear();
+    m_defaultIconIndex = -1;
+    ResetControlHandles();
+}
+
+void CTrafficDetailWindow::HideWindow()
+{
+    SaveCurrentColumnWidths();
+    ShowWindow(m_hwnd, SW_HIDE);
+}
+
+void CTrafficDetailWindow::ResetControlHandles()
+{
+    m_hwnd = m_list = m_toggleViewButton = m_languageLabel = m_languageCombo = nullptr;
+    m_pauseRefreshButton = m_startLabel = m_startDatePicker = m_startTimePicker = nullptr;
+    m_endLabel = m_endDatePicker = m_endTimePicker = m_hidePidCheck = nullptr;
+    m_dayRangeButton = m_weekRangeButton = nullptr;
+    m_monthRangeButton = m_yearRangeButton = m_summary = nullptr;
+}
+
+LRESULT CTrafficDetailWindow::HandleMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param)
+{
+    switch (message)
+    {
+    case WM_CREATE:
+        OnWindowCreated(hwnd);
+        return 0;
+    case WM_SIZE:
+        ResizeChildren(LOWORD(l_param), HIWORD(l_param));
+        return 0;
+    case WM_TIMER:
+        if (HandleRefreshTimer(w_param))
+        {
+            return 0;
+        }
+        break;
+    case WM_COMMAND:
+        if (HandleCommand(LOWORD(w_param), HIWORD(w_param)))
+        {
+            return 0;
+        }
+        break;
+    case WM_NOTIFY:
+        if (HandleNotify(reinterpret_cast<NMHDR*>(l_param)))
+        {
+            return 0;
+        }
+        break;
+    case WM_CTLCOLORSTATIC:
+        SetBkMode(reinterpret_cast<HDC>(w_param), TRANSPARENT);
+        return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+    case WM_CLOSE:
+        TMPluginDetail::IgnoreUnused(hwnd);
+        HideWindow();
+        return 0;
+    case WM_DESTROY:
+        OnWindowDestroyed(hwnd);
+        return 0;
+    default:
+        break;
+    }
+
+    return DefWindowProcW(hwnd, message, w_param, l_param);
+}
+
+LRESULT CALLBACK CTrafficDetailWindow::StaticWndProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param)
+{
+    CTrafficDetailWindow* self = nullptr;
+    if (message == WM_NCCREATE)
+    {
+        auto* create_struct = reinterpret_cast<CREATESTRUCTW*>(l_param);
+        self = static_cast<CTrafficDetailWindow*>(create_struct->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        self->m_hwnd = hwnd;
+    }
+    else
+    {
+        self = reinterpret_cast<CTrafficDetailWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    }
+
+    if (self != nullptr)
+    {
+        return self->HandleMessage(hwnd, message, w_param, l_param);
+    }
+
+    return DefWindowProcW(hwnd, message, w_param, l_param);
+}
