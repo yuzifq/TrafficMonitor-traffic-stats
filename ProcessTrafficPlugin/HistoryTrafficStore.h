@@ -57,13 +57,18 @@ private:
 
     void EnsureLoaded();
     void Load();
-    void LoadDailyHistoryFiles(TrafficAmount& loaded_total);
-    void Save() const;
+    void ArchiveOldHistoryFiles();
+    void LoadHistoryDirectory(const std::wstring& directory, TrafficAmount& loaded_total);
+    void AddRangeHistoryFromDirectory(
+        const std::wstring& directory,
+        const DateTimeRange& range,
+        std::unordered_map<std::wstring, TrafficAmount>& totals_by_app) const;
     void AppendHistoryEntries(const std::wstring& bucket_key, const std::vector<std::pair<std::wstring, TrafficAmount>>& entries) const;
     void LoadState();
     void SaveState() const;
 
     static DateTimeRange GetDefaultRange();
+    static SYSTEMTIME GetArchiveCutoff();
     static DateTimeRange NormalizeRange(const DateTimeRange& range);
     static std::wstring GetCurrentMinuteKey();
     static std::wstring FormatMinuteTime(const SYSTEMTIME& time);
@@ -83,12 +88,12 @@ private:
 private:
     std::wstring m_baseDir;
     std::wstring m_historyDir;
+    std::wstring m_oldHistoryDir;
     std::wstring m_stateFilePath;
     bool m_loaded{ false };
     std::unordered_map<std::wstring, BucketAppMap> m_bucketByApp;
     mutable std::unordered_map<std::wstring, BucketTimeRange> m_bucketTimeRangeByKey;
     std::unordered_map<std::wstring, std::wstring> m_pathByApp;
-    std::unordered_map<std::wstring, TrafficAmount> m_lastSeenTotals;
     DateTimeRange m_preferredRange{};
     DisplayLanguage m_preferredLanguage{ DisplayLanguage::English };
     mutable bool m_rangeCacheValid{ false };
@@ -97,4 +102,5 @@ private:
     mutable TrafficAmount m_cachedRangeTotal{};
     mutable bool m_allTimeCacheValid{ false };
     mutable TrafficAmount m_cachedAllTimeTotal{};
+    bool m_hasPersistedAllTime{ false };
 };

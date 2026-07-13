@@ -13,6 +13,7 @@ public:
         DWORD pid;
         std::wstring exeName;
         std::wstring exePath;
+        ULONGLONG creationTime{};
     };
 
     static std::vector<DWORD> FindProcessIdsByExeName(const std::wstring& exe_name);

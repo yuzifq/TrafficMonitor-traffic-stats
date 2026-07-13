@@ -145,14 +145,44 @@ std::vector<CProcessFinder::ProcessEntry> CProcNetPlugin::GetCachedProcesses() c
 {
     const auto now = GetTickCount64();
     std::lock_guard<std::mutex> lock(m_processCacheMutex);
-    if (m_cachedProcesses.empty() || now - m_processCacheTick >= 3000)
+    if (m_cachedProcesses.empty() || now - m_processCacheTick >= 1000)
     {
         m_cachedProcesses = CProcessFinder::EnumerateProcesses();
         for (const auto& process : m_cachedProcesses)
         {
             if (!process.exeName.empty())
             {
-                m_knownProcessesByPid[process.pid] = process;
+                auto known_it = m_knownProcessesByPid.find(process.pid);
+                if (known_it == m_knownProcessesByPid.end())
+                {
+                    m_knownProcessesByPid.emplace(process.pid, process);
+                }
+                else if (process.creationTime == 0 ||
+                         known_it->second.creationTime == 0 ||
+                         process.creationTime != known_it->second.creationTime)
+                {
+                    known_it->second = process;
+                }
+                else
+                {
+                    known_it->second.exeName = process.exeName;
+                    known_it->second.exePath = process.exePath;
+                }
+                m_knownProcessLastSeenTick[process.pid] = now;
+            }
+        }
+
+        for (auto known_it = m_knownProcessesByPid.begin(); known_it != m_knownProcessesByPid.end();)
+        {
+            const auto seen_it = m_knownProcessLastSeenTick.find(known_it->first);
+            if (seen_it == m_knownProcessLastSeenTick.end() || now - seen_it->second > 10000)
+            {
+                m_knownProcessLastSeenTick.erase(known_it->first);
+                known_it = m_knownProcessesByPid.erase(known_it);
+            }
+            else
+            {
+                ++known_it;
             }
         }
         m_processCacheTick = now;
@@ -193,8 +223,8 @@ CHistoryTrafficStore::AppTotalEntry CProcNetPlugin::MakeHistoryEntry(const AppTr
     CHistoryTrafficStore::AppTotalEntry entry{};
     entry.appName = app.exeName;
     entry.exePath = app.exePath;
-    entry.rxTotalBytes = app.rxTotalBytes;
-    entry.txTotalBytes = app.txTotalBytes;
+    entry.rxTotalBytes = app.rxSampleBytes;
+    entry.txTotalBytes = app.txSampleBytes;
     return entry;
 }
 
@@ -221,7 +251,7 @@ const wchar_t* CProcNetPlugin::GetInfoText(PluginInfoIndex index, CHistoryTraffi
     case TMI_COPYRIGHT:
         return L"Copyright (c) 2026 yuzifq";
     case TMI_VERSION:
-        return L"1.1.0";
+        return L"1.1.1";
     case TMI_URL:
         return L"https://github.com/yuzifq/TrafficMonitor-traffic-stats";
     case TMI_API_VERSION:
@@ -334,6 +364,9 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildAllApps() cons
         app.txBytesPerSec += entry.second.txBytesPerSec;
         app.rxTotalBytes += entry.second.rxTotalBytes;
         app.txTotalBytes += entry.second.txTotalBytes;
+        app.rxSampleBytes += entry.second.rxSampleBytes;
+        app.txSampleBytes += entry.second.txSampleBytes;
+        app.sampleSequence = (std::max)(app.sampleSequence, entry.second.sampleSequence);
     }
 
     std::vector<AppTrafficEntry> result;
@@ -341,7 +374,7 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildAllApps() cons
     for (auto& entry : apps_by_name)
     {
         if (entry.second.rxBytesPerSec == 0 && entry.second.txBytesPerSec == 0 &&
-            entry.second.rxTotalBytes == 0 && entry.second.txTotalBytes == 0)
+            entry.second.rxSampleBytes == 0 && entry.second.txSampleBytes == 0)
         {
             continue;
         }
@@ -467,6 +500,17 @@ void CProcNetPlugin::UpdateDisplayText(const std::vector<AppTrafficEntry>& apps)
 
 void CProcNetPlugin::UpdateHistory(const std::vector<AppTrafficEntry>& apps)
 {
+    std::uint64_t sample_sequence = 0;
+    for (const auto& app : apps)
+    {
+        sample_sequence = (std::max)(sample_sequence, app.sampleSequence);
+    }
+    if (sample_sequence == 0 || sample_sequence == m_lastHistorySampleSequence)
+    {
+        return;
+    }
+    m_lastHistorySampleSequence = sample_sequence;
+
     std::vector<CHistoryTrafficStore::AppTotalEntry> history_apps;
     history_apps.reserve(apps.size());
     for (const auto& app : apps)

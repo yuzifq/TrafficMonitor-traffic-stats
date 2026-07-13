@@ -100,6 +100,7 @@ private:
     HWND m_endTimePicker;
     HWND m_hidePidCheck;
     HWND m_dayRangeButton;
+    HWND m_weekRangeButton;
     HWND m_monthRangeButton;
     HWND m_yearRangeButton;
     HWND m_summary;

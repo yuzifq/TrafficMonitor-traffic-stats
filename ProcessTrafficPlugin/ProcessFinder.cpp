@@ -25,7 +25,13 @@ bool EqualsIgnoreCase(const std::wstring& left, const std::wstring& right)
     return true;
 }
 
-std::wstring QueryProcessImagePath(DWORD pid)
+struct ProcessDetails
+{
+    std::wstring imagePath;
+    ULONGLONG creationTime{};
+};
+
+ProcessDetails QueryProcessDetails(DWORD pid)
 {
     std::array<wchar_t, 32768> buffer{};
     DWORD size = static_cast<DWORD>(buffer.size());
@@ -36,10 +42,22 @@ std::wstring QueryProcessImagePath(DWORD pid)
         return {};
     }
 
-    std::wstring result;
+    ProcessDetails result{};
     if (QueryFullProcessImageNameW(process, 0, buffer.data(), &size) != FALSE)
     {
-        result.assign(buffer.data(), size);
+        result.imagePath.assign(buffer.data(), size);
+    }
+
+    FILETIME creation_time{};
+    FILETIME exit_time{};
+    FILETIME kernel_time{};
+    FILETIME user_time{};
+    if (GetProcessTimes(process, &creation_time, &exit_time, &kernel_time, &user_time) != FALSE)
+    {
+        ULARGE_INTEGER value{};
+        value.LowPart = creation_time.dwLowDateTime;
+        value.HighPart = creation_time.dwHighDateTime;
+        result.creationTime = value.QuadPart;
     }
 
     CloseHandle(process);
@@ -64,7 +82,13 @@ std::vector<CProcessFinder::ProcessEntry> CProcessFinder::EnumerateProcesses()
     {
         do
         {
-            processes.push_back(ProcessEntry{ entry.th32ProcessID, entry.szExeFile, QueryProcessImagePath(entry.th32ProcessID) });
+            const auto details = QueryProcessDetails(entry.th32ProcessID);
+            processes.push_back(ProcessEntry{
+                entry.th32ProcessID,
+                entry.szExeFile,
+                details.imagePath,
+                details.creationTime,
+            });
         } while (Process32NextW(snapshot, &entry));
     }
 

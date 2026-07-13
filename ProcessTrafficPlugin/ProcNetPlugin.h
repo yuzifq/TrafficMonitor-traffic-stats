@@ -31,6 +31,9 @@ public:
         std::uint64_t txBytesPerSec{};
         std::uint64_t rxTotalBytes{};
         std::uint64_t txTotalBytes{};
+        std::uint64_t rxSampleBytes{};
+        std::uint64_t txSampleBytes{};
+        std::uint64_t sampleSequence{};
     };
 
     static CProcNetPlugin& Instance();
@@ -85,9 +88,11 @@ private:
     std::wstring m_configDir;
     bool m_collectorStarted;
     bool m_historyInitialized;
+    std::uint64_t m_lastHistorySampleSequence{};
     mutable std::mutex m_processCacheMutex;
     mutable ULONGLONG m_processCacheTick;
     mutable std::vector<CProcessFinder::ProcessEntry> m_cachedProcesses;
     mutable std::unordered_map<DWORD, CProcessFinder::ProcessEntry> m_knownProcessesByPid;
+    mutable std::unordered_map<DWORD, ULONGLONG> m_knownProcessLastSeenTick;
     std::unique_ptr<CTrafficDetailWindow> m_detailWindow;
 };

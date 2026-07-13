@@ -22,6 +22,9 @@ public:
         std::uint64_t txBytesPerSec{};
         std::uint64_t rxTotalBytes{};
         std::uint64_t txTotalBytes{};
+        std::uint64_t rxSampleBytes{};
+        std::uint64_t txSampleBytes{};
+        std::uint64_t sampleSequence{};
     };
 
     CEtwProcNetCollector();
@@ -57,6 +60,7 @@ private:
     TRACEHANDLE m_traceHandle;
     bool m_ownsSession;
     mutable ULONGLONG m_lastSampleTick;
+    mutable std::uint64_t m_sampleSequence;
     std::unique_ptr<unsigned char[]> m_propertiesBuffer;
 
     mutable std::unordered_map<DWORD, ProcessTrafficSnapshot> m_snapshotByPid;

@@ -29,7 +29,8 @@ CEtwProcNetCollector::CEtwProcNetCollector()
       m_sessionHandle(0),
       m_traceHandle(INVALID_PROCESSTRACE_HANDLE),
       m_ownsSession(false),
-      m_lastSampleTick(0)
+      m_lastSampleTick(0),
+      m_sampleSequence(0)
 {
 }
 
@@ -52,6 +53,7 @@ bool CEtwProcNetCollector::Start()
         m_lastRxTotalByPid.clear();
         m_lastTxTotalByPid.clear();
         m_lastSampleTick = 0;
+        m_sampleSequence = 0;
     }
     UpdateStatus(L"Starting ETW session...");
 
@@ -180,10 +182,14 @@ void CEtwProcNetCollector::RefreshRates() const
     if (m_lastSampleTick == 0)
     {
         m_lastSampleTick = now;
-        for (const auto& entry : m_snapshotByPid)
+        ++m_sampleSequence;
+        for (auto& entry : m_snapshotByPid)
         {
             m_lastRxTotalByPid[entry.first] = entry.second.rxTotalBytes;
             m_lastTxTotalByPid[entry.first] = entry.second.txTotalBytes;
+            entry.second.rxSampleBytes = 0;
+            entry.second.txSampleBytes = 0;
+            entry.second.sampleSequence = m_sampleSequence;
         }
         return;
     }
@@ -194,12 +200,18 @@ void CEtwProcNetCollector::RefreshRates() const
         return;
     }
 
+    ++m_sampleSequence;
     for (auto& entry : m_snapshotByPid)
     {
         const auto last_rx = m_lastRxTotalByPid[entry.first];
         const auto last_tx = m_lastTxTotalByPid[entry.first];
-        entry.second.rxBytesPerSec = ((entry.second.rxTotalBytes - last_rx) * 1000ULL) / elapsed;
-        entry.second.txBytesPerSec = ((entry.second.txTotalBytes - last_tx) * 1000ULL) / elapsed;
+        const auto rx_delta = entry.second.rxTotalBytes >= last_rx ? entry.second.rxTotalBytes - last_rx : 0;
+        const auto tx_delta = entry.second.txTotalBytes >= last_tx ? entry.second.txTotalBytes - last_tx : 0;
+        entry.second.rxBytesPerSec = (rx_delta * 1000ULL) / elapsed;
+        entry.second.txBytesPerSec = (tx_delta * 1000ULL) / elapsed;
+        entry.second.rxSampleBytes = rx_delta;
+        entry.second.txSampleBytes = tx_delta;
+        entry.second.sampleSequence = m_sampleSequence;
         m_lastRxTotalByPid[entry.first] = entry.second.rxTotalBytes;
         m_lastTxTotalByPid[entry.first] = entry.second.txTotalBytes;
     }
