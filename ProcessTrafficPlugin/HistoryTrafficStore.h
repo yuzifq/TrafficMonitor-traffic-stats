@@ -42,6 +42,7 @@ public:
     std::vector<AppTotalEntry> GetRangeAppTotals(const DateTimeRange& range) const;
     TrafficAmount GetRangeTotal(const DateTimeRange& range) const;
     TrafficAmount GetAllTimeTotal() const;
+    bool ExportRange(const DateTimeRange& range, const std::wstring& output_path, std::wstring& error_message) const;
     DateTimeRange GetPreferredRange() const;
     void SetPreferredRange(const DateTimeRange& range);
     DisplayLanguage GetPreferredLanguage() const;
@@ -56,19 +57,30 @@ private:
     };
 
     void EnsureLoaded();
+    bool EnsureCompletedSummaries();
     void Load();
-    void ArchiveOldHistoryFiles();
+    bool LoadAppDictionary();
+    bool SaveAppDictionary() const;
+    std::uint64_t EnsureAppId(const std::wstring& app_name);
+    void LoadHistoryFile(const std::wstring& path, TrafficAmount& loaded_total);
     void LoadHistoryDirectory(const std::wstring& directory, TrafficAmount& loaded_total);
+    bool AddMinuteFileTotals(
+        const std::wstring& path,
+        const DateTimeRange& range,
+        std::unordered_map<std::wstring, TrafficAmount>& totals_by_app) const;
     void AddRangeHistoryFromDirectory(
         const std::wstring& directory,
         const DateTimeRange& range,
         std::unordered_map<std::wstring, TrafficAmount>& totals_by_app) const;
-    void AppendHistoryEntries(const std::wstring& bucket_key, const std::vector<std::pair<std::wstring, TrafficAmount>>& entries) const;
+    bool AppendHistoryEntries(const std::wstring& bucket_key, const std::vector<std::pair<std::wstring, TrafficAmount>>& entries);
+    void LoadCheckpoint();
+    bool SaveCheckpoint();
+    bool FlushCurrentMinute();
+    void ClearCheckpoint() const;
     void LoadState();
-    void SaveState() const;
+    bool SaveState() const;
 
     static DateTimeRange GetDefaultRange();
-    static SYSTEMTIME GetArchiveCutoff();
     static DateTimeRange NormalizeRange(const DateTimeRange& range);
     static std::wstring GetCurrentMinuteKey();
     static std::wstring FormatMinuteTime(const SYSTEMTIME& time);
@@ -88,14 +100,24 @@ private:
 private:
     std::wstring m_baseDir;
     std::wstring m_historyDir;
-    std::wstring m_oldHistoryDir;
+    std::wstring m_appDictionaryPath;
     std::wstring m_stateFilePath;
+    std::wstring m_checkpointFilePath;
+    std::wstring m_checkpointCommitPath;
     bool m_loaded{ false };
     std::unordered_map<std::wstring, BucketAppMap> m_bucketByApp;
+    std::wstring m_currentMinuteKey;
+    BucketAppMap m_currentMinuteTotals;
+    bool m_currentMinuteAppendUncertain{ false };
+    ULONGLONG m_lastCheckpointTick{};
     mutable std::unordered_map<std::wstring, BucketTimeRange> m_bucketTimeRangeByKey;
+    std::unordered_map<std::wstring, std::uint64_t> m_appIdByName;
+    std::unordered_map<std::uint64_t, std::wstring> m_appNameById;
+    std::uint64_t m_nextAppId{ 1 };
     std::unordered_map<std::wstring, std::wstring> m_pathByApp;
     DateTimeRange m_preferredRange{};
     DisplayLanguage m_preferredLanguage{ DisplayLanguage::English };
+    int m_historyMigrationFormat{};
     mutable bool m_rangeCacheValid{ false };
     mutable DateTimeRange m_cachedRange{};
     mutable std::vector<AppTotalEntry> m_cachedRangeApps;

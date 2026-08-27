@@ -52,6 +52,10 @@ public:
     std::vector<AppTrafficEntry> BuildAllApps() const;
     std::vector<AppTrafficEntry> BuildHistoryApps(const CHistoryTrafficStore::DateTimeRange& range) const;
     std::wstring BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range, CHistoryTrafficStore::DisplayLanguage language) const;
+    bool ExportHistory(
+        const CHistoryTrafficStore::DateTimeRange& range,
+        const std::wstring& output_path,
+        std::wstring& error_message) const;
     CHistoryTrafficStore::DateTimeRange GetPreferredRange() const;
     void SetPreferredRange(const CHistoryTrafficStore::DateTimeRange& range);
     CHistoryTrafficStore::DisplayLanguage GetPreferredLanguage() const;

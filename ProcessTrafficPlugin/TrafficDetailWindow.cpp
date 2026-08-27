@@ -7,6 +7,7 @@
 #include <Windows.h>
 #include <Windowsx.h>
 #include <CommCtrl.h>
+#include <CommDlg.h>
 #include <Shellapi.h>
 
 #include <algorithm>
@@ -16,6 +17,7 @@
 #include <vector>
 
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "comdlg32.lib")
 
 namespace
 {
@@ -36,6 +38,7 @@ constexpr int kDayRangeButtonId = 1013;
 constexpr int kMonthRangeButtonId = 1014;
 constexpr int kYearRangeButtonId = 1015;
 constexpr int kWeekRangeButtonId = 1017;
+constexpr int kExportButtonId = 1018;
 constexpr int kSummaryId = 1003;
 constexpr int kListId = 1004;
 constexpr int kMargin = 10;
@@ -295,6 +298,31 @@ LocalizedText GetPauseButtonText(bool refresh_paused)
         ? LocalizedText{ L"Resume Refresh", L"继续刷新界面" }
         : LocalizedText{ L"Pause Refresh", L"暂停刷新界面" };
 }
+
+std::wstring BuildExportFileName(const CHistoryTrafficStore::DateTimeRange& range)
+{
+    wchar_t buffer[64]{};
+    const bool same_day = range.start.wYear == range.end.wYear &&
+        range.start.wMonth == range.end.wMonth &&
+        range.start.wDay == range.end.wDay;
+    if (same_day)
+    {
+        swprintf_s(buffer, L"%04u-%02u-%02u.tsv", range.start.wYear, range.start.wMonth, range.start.wDay);
+    }
+    else
+    {
+        swprintf_s(
+            buffer,
+            L"%04u-%02u-%02u_%04u-%02u-%02u.tsv",
+            range.start.wYear,
+            range.start.wMonth,
+            range.start.wDay,
+            range.end.wYear,
+            range.end.wMonth,
+            range.end.wDay);
+    }
+    return buffer;
+}
 }
 
 CTrafficDetailWindow::CTrafficDetailWindow(CProcNetPlugin& plugin)
@@ -312,6 +340,7 @@ CTrafficDetailWindow::CTrafficDetailWindow(CProcNetPlugin& plugin)
       m_endDatePicker(nullptr),
       m_endTimePicker(nullptr),
       m_hidePidCheck(nullptr),
+      m_exportButton(nullptr),
       m_dayRangeButton(nullptr),
       m_weekRangeButton(nullptr),
       m_monthRangeButton(nullptr),
@@ -452,6 +481,9 @@ void CTrafficDetailWindow::CreateChildControls(HWND hwnd)
         L"BUTTON", L"Hide anonymous PID items", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
         end_left, kMargin + kRangeRowSpacing * 2, 220, kCheckBoxHeight, hwnd, kHidePidCheckId);
     Button_SetCheck(m_hidePidCheck, BST_CHECKED);
+    m_exportButton = CreateChildWindow(
+        L"BUTTON", L"Export", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        end_left, kMargin + kRangeRowSpacing * 3, 120, kButtonHeight, hwnd, kExportButtonId);
 
     m_dayRangeButton = CreateChildWindow(
         L"BUTTON", L"日", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -489,7 +521,7 @@ void CTrafficDetailWindow::SetAllControlFonts() const
     const HWND controls[] = {
         m_toggleViewButton, m_languageLabel, m_languageCombo, m_pauseRefreshButton,
         m_startLabel, m_startDatePicker, m_startTimePicker, m_endLabel, m_endDatePicker,
-        m_endTimePicker, m_hidePidCheck, m_dayRangeButton, m_weekRangeButton,
+        m_endTimePicker, m_hidePidCheck, m_exportButton, m_dayRangeButton, m_weekRangeButton,
         m_monthRangeButton, m_yearRangeButton, m_list, m_summary
     };
 
@@ -576,6 +608,50 @@ void CTrafficDetailWindow::ToggleRefreshPaused()
     UpdateButtonText();
 }
 
+void CTrafficDetailWindow::ExportSelectedRange()
+{
+    const auto language = GetSelectedLanguage();
+    const auto range = GetSelectedRange();
+    auto default_name = BuildExportFileName(range);
+    std::vector<wchar_t> path_buffer(32768, L'\0');
+    std::copy(default_name.begin(), default_name.end(), path_buffer.begin());
+
+    const wchar_t filter[] = L"TSV files (*.tsv)\0*.tsv\0All files (*.*)\0*.*\0\0";
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = m_hwnd;
+    dialog.lpstrFilter = filter;
+    dialog.lpstrFile = path_buffer.data();
+    dialog.nMaxFile = static_cast<DWORD>(path_buffer.size());
+    dialog.lpstrDefExt = L"tsv";
+    dialog.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+    if (GetSaveFileNameW(&dialog) == FALSE)
+    {
+        return;
+    }
+
+    SetCursor(LoadCursorW(nullptr, IDC_WAIT));
+    std::wstring error_message;
+    const bool exported = m_plugin.ExportHistory(range, path_buffer.data(), error_message);
+    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+
+    if (exported)
+    {
+        std::wstring message = GetLocalizedText(language, { L"Export completed:\r\n", L"导出完成：\r\n" });
+        message += path_buffer.data();
+        MessageBoxW(m_hwnd, message.c_str(), GetLocalizedText(language, { L"Export", L"导出" }), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    std::wstring message = GetLocalizedText(language, { L"Export failed.", L"导出失败。" });
+    if (!error_message.empty())
+    {
+        message += L"\r\n";
+        message += error_message;
+    }
+    MessageBoxW(m_hwnd, message.c_str(), GetLocalizedText(language, { L"Export", L"导出" }), MB_OK | MB_ICONERROR);
+}
+
 void CTrafficDetailWindow::ApplyLanguageTexts()
 {
     const auto language = GetSelectedLanguage();
@@ -583,6 +659,7 @@ void CTrafficDetailWindow::ApplyLanguageTexts()
     SetWindowTextIfPresent(m_startLabel, GetLocalizedText(language, { L"Start:", L"开始时间:" }));
     SetWindowTextIfPresent(m_endLabel, GetLocalizedText(language, { L"End:", L"结束时间:" }));
     SetWindowTextIfPresent(m_hidePidCheck, GetLocalizedText(language, { L"Hide anonymous PID items", L"隐藏匿名 PID 项" }));
+    SetWindowTextIfPresent(m_exportButton, GetLocalizedText(language, { L"Export", L"导出" }));
     SetWindowTextIfPresent(m_dayRangeButton, GetLocalizedText(language, { L"Day", L"日" }));
     SetWindowTextIfPresent(m_weekRangeButton, GetLocalizedText(language, { L"Week", L"周" }));
     SetWindowTextIfPresent(m_monthRangeButton, GetLocalizedText(language, { L"Month", L"月" }));
@@ -661,7 +738,7 @@ void CTrafficDetailWindow::ShowTotalViewControls(bool show)
     const int command = show ? SW_SHOW : SW_HIDE;
     const HWND controls[] = {
         m_startLabel, m_startDatePicker, m_startTimePicker, m_endLabel,
-        m_endDatePicker, m_endTimePicker, m_hidePidCheck, m_dayRangeButton,
+        m_endDatePicker, m_endTimePicker, m_hidePidCheck, m_exportButton, m_dayRangeButton,
         m_weekRangeButton, m_monthRangeButton, m_yearRangeButton
     };
 
@@ -717,6 +794,7 @@ void CTrafficDetailWindow::UpdateButtonText()
     const auto language = GetSelectedLanguage();
     SetWindowTextIfPresent(m_toggleViewButton, GetLocalizedText(language, GetToggleButtonText(m_viewMode == ViewMode::Realtime)));
     SetWindowTextIfPresent(m_pauseRefreshButton, GetLocalizedText(language, GetPauseButtonText(m_refreshPaused)));
+    SetWindowTextIfPresent(m_exportButton, GetLocalizedText(language, { L"Export", L"导出" }));
 }
 
 void CTrafficDetailWindow::ApplyRangeControls()
@@ -1153,6 +1231,7 @@ void CTrafficDetailWindow::LayoutBottomControls(int width, int height)
     MoveControlIfPresent(m_endDatePicker, picker_left, range_block_top + kRangeRowSpacing, kRangeDateWidth, 28);
     MoveControlIfPresent(m_endTimePicker, picker_left + kRangeDateWidth + 8, range_block_top + kRangeRowSpacing, kRangeTimeWidth, 28);
     MoveControlIfPresent(m_hidePidCheck, range_block_left, range_block_top + kRangeRowSpacing * 2 + 2, 220, kCheckBoxHeight);
+    MoveControlIfPresent(m_exportButton, range_block_left, range_block_top + kRangeRowSpacing * 3, 120, kButtonHeight);
     MoveControlIfPresent(m_dayRangeButton, quick_button_left, range_block_top, kQuickButtonWidth, kQuickButtonHeight);
     MoveControlIfPresent(m_weekRangeButton, quick_button_left, range_block_top + kRangeRowSpacing, kQuickButtonWidth, kQuickButtonHeight);
     MoveControlIfPresent(m_monthRangeButton, quick_button_left, range_block_top + kRangeRowSpacing * 2, kQuickButtonWidth, kQuickButtonHeight);
@@ -1239,6 +1318,11 @@ bool CTrafficDetailWindow::HandleCommand(WORD command_id, WORD notify_code)
         RefreshView();
         return true;
     }
+    if (command_id == kExportButtonId)
+    {
+        ExportSelectedRange();
+        return true;
+    }
 
     return false;
 }
@@ -1322,7 +1406,7 @@ void CTrafficDetailWindow::ResetControlHandles()
 {
     m_hwnd = m_list = m_toggleViewButton = m_languageLabel = m_languageCombo = nullptr;
     m_pauseRefreshButton = m_startLabel = m_startDatePicker = m_startTimePicker = nullptr;
-    m_endLabel = m_endDatePicker = m_endTimePicker = m_hidePidCheck = nullptr;
+    m_endLabel = m_endDatePicker = m_endTimePicker = m_hidePidCheck = m_exportButton = nullptr;
     m_dayRangeButton = m_weekRangeButton = nullptr;
     m_monthRangeButton = m_yearRangeButton = m_summary = nullptr;
 }

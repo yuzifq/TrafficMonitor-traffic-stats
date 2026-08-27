@@ -38,6 +38,7 @@ private:
     void RefreshView();
     void ToggleView();
     void ToggleRefreshPaused();
+    void ExportSelectedRange();
     void ApplyLanguageTexts();
     void ApplyQuickRange(int button_id);
     void ApplyCurrentRangeToControls();
@@ -99,6 +100,7 @@ private:
     HWND m_endDatePicker;
     HWND m_endTimePicker;
     HWND m_hidePidCheck;
+    HWND m_exportButton;
     HWND m_dayRangeButton;
     HWND m_weekRangeButton;
     HWND m_monthRangeButton;

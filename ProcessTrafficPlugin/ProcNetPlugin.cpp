@@ -7,6 +7,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <cwctype>
 #include <unordered_map>
 #include <utility>
 
@@ -79,6 +80,10 @@ constexpr LocalizedText kAllTimeDownload{ L"All-Time Download: ", L"历史累计
 constexpr LocalizedText kAllTimeUpload{ L"All-Time Upload: ", L"历史累计上传: " };
 constexpr LocalizedText kAllTimeTotal{ L"All-Time Total: ", L"历史累计总流量: " };
 constexpr LocalizedText kCurrentStatus{ L"Status: ", L"当前状态: " };
+constexpr LocalizedText kStatusRunning{ L"Running", L"运行中" };
+constexpr LocalizedText kStatusStarting{ L"Starting", L"启动中" };
+constexpr LocalizedText kStatusStopped{ L"Stopped", L"已停止" };
+constexpr LocalizedText kStatusError{ L"Error", L"异常" };
 constexpr LocalizedText kTooltipTitle{ L"Real-time traffic ranking", L"实时流量排行" };
 constexpr LocalizedText kTooltipDown{ L" Down=", L" 下载=" };
 constexpr LocalizedText kTooltipUp{ L" Up=", L" 上传=" };
@@ -86,6 +91,31 @@ constexpr LocalizedText kTooltipMenuHint{ L"\nRight-click plugin menu: Traffic D
 constexpr LocalizedText kTooltipStatus{ L"\nStatus: ", L"\n状态: " };
 constexpr LocalizedText kDefaultDownLabel{ L"App Dn", L"应用下" };
 constexpr LocalizedText kDefaultUpLabel{ L"App Up", L"应用上" };
+
+const wchar_t* GetSimpleStatus(
+    CHistoryTrafficStore::DisplayLanguage language,
+    const std::wstring& collector_status)
+{
+    auto normalized = collector_status;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](wchar_t value) {
+        return static_cast<wchar_t>(std::towlower(value));
+    });
+    if (normalized.find(L"failed") != std::wstring::npos ||
+        normalized.find(L"error") != std::wstring::npos ||
+        normalized.find(L"ended") != std::wstring::npos)
+    {
+        return SelectLocalizedText(language, kStatusError);
+    }
+    if (normalized.find(L"starting") != std::wstring::npos)
+    {
+        return SelectLocalizedText(language, kStatusStarting);
+    }
+    if (normalized.find(L"stopped") != std::wstring::npos)
+    {
+        return SelectLocalizedText(language, kStatusStopped);
+    }
+    return SelectLocalizedText(language, kStatusRunning);
+}
 }
 
 CProcNetPlugin& CProcNetPlugin::Instance()
@@ -251,7 +281,7 @@ const wchar_t* CProcNetPlugin::GetInfoText(PluginInfoIndex index, CHistoryTraffi
     case TMI_COPYRIGHT:
         return L"Copyright (c) 2026 yuzifq";
     case TMI_VERSION:
-        return L"1.1.1";
+        return L"1.1.2";
     case TMI_URL:
         return L"https://github.com/yuzifq/TrafficMonitor-traffic-stats";
     case TMI_API_VERSION:
@@ -416,8 +446,16 @@ std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTim
     AppendTrafficBlock(text, language, all, kAllTimeDownload, kAllTimeUpload, kAllTimeTotal);
     text += L"\r\n\r\n";
     text += GetLocalizedText(language, kCurrentStatus);
-    text += m_collector.GetStatusText();
+    text += GetSimpleStatus(language, m_collector.GetStatusText());
     return text;
+}
+
+bool CProcNetPlugin::ExportHistory(
+    const CHistoryTrafficStore::DateTimeRange& range,
+    const std::wstring& output_path,
+    std::wstring& error_message) const
+{
+    return m_historyStore.ExportRange(range, output_path, error_message);
 }
 
 CHistoryTrafficStore::DateTimeRange CProcNetPlugin::GetPreferredRange() const
