@@ -37,6 +37,7 @@ struct SummaryData
 };
 
 constexpr std::uint64_t kFileTimePerDay = 864000000000ULL;
+constexpr int kCurrentAllTimeRecoveryFormat = 1;
 
 ULONGLONG SystemTimeValue(const SYSTEMTIME& time);
 
@@ -1332,6 +1333,7 @@ void CHistoryTrafficStore::Initialize(const std::wstring& base_dir)
     m_nextAppId = 1;
     m_pathByApp.clear();
     m_historyMigrationFormat = 0;
+    m_allTimeRecoveryFormat = 0;
     m_hasPersistedAllTime = false;
     InvalidateCaches();
 }
@@ -2077,7 +2079,9 @@ bool CHistoryTrafficStore::EnsureCompletedSummaries()
     for (const auto& daily : daily_files)
     {
         SummaryData existing{};
-        if (TryReadSummaryFile(DaySummaryPath(m_historyDir, daily.second), SummaryKind::Day, daily.second, daily.second, existing))
+        const auto source_generation = GetSourceGeneration(daily.first);
+        if (TryReadSummaryFile(DaySummaryPath(m_historyDir, daily.second), SummaryKind::Day, daily.second, daily.second, existing) &&
+            existing.sourceGeneration == source_generation)
         {
             continue;
         }
@@ -2091,7 +2095,7 @@ bool CHistoryTrafficStore::EnsureCompletedSummaries()
                 daily.second,
                 daily.second,
                 source_count,
-                GetSourceGeneration(daily.first),
+                source_generation,
                 summary);
         }
     }
@@ -2142,7 +2146,9 @@ bool CHistoryTrafficStore::EnsureCompletedSummaries()
             }
             const auto summary_path = MonthSummaryPath(m_historyDir, month_start);
             SummaryData existing{};
-            if (TryReadSummaryFile(summary_path, SummaryKind::Month, month_start, month_end, existing))
+            if (TryReadSummaryFile(summary_path, SummaryKind::Month, month_start, month_end, existing) &&
+                existing.sourceCount == source_count &&
+                existing.sourceGeneration == month_summary.sourceGeneration)
             {
                 continue;
             }
@@ -2183,7 +2189,9 @@ bool CHistoryTrafficStore::EnsureCompletedSummaries()
             }
             const auto summary_path = WeekSummaryPath(m_historyDir, monday);
             SummaryData existing{};
-            if (TryReadSummaryFile(summary_path, SummaryKind::Week, monday, sunday, existing))
+            if (TryReadSummaryFile(summary_path, SummaryKind::Week, monday, sunday, existing) &&
+                existing.sourceCount == source_count &&
+                existing.sourceGeneration == week_summary.sourceGeneration)
             {
                 continue;
             }
@@ -2243,7 +2251,9 @@ bool CHistoryTrafficStore::EnsureCompletedSummaries()
             }
             const auto summary_path = QuarterSummaryPath(m_historyDir, quarter_start);
             SummaryData existing{};
-            if (TryReadSummaryFile(summary_path, SummaryKind::Quarter, quarter_start, quarter_end, existing))
+            if (TryReadSummaryFile(summary_path, SummaryKind::Quarter, quarter_start, quarter_end, existing) &&
+                existing.sourceCount == source_count &&
+                existing.sourceGeneration == quarter_summary.sourceGeneration)
             {
                 continue;
             }
@@ -2278,6 +2288,164 @@ void CHistoryTrafficStore::Load()
         m_allTimeCacheValid = true;
     }
     LoadCheckpoint();
+
+    if (!m_hasPersistedAllTime || m_allTimeRecoveryFormat < kCurrentAllTimeRecoveryFormat)
+    {
+        const auto stored_total = CalculateStoredHistoryTotal();
+        m_cachedAllTimeTotal.rxBytes = (std::max)(m_cachedAllTimeTotal.rxBytes, stored_total.rxBytes);
+        m_cachedAllTimeTotal.txBytes = (std::max)(m_cachedAllTimeTotal.txBytes, stored_total.txBytes);
+        m_allTimeCacheValid = true;
+        m_hasPersistedAllTime = true;
+        m_allTimeRecoveryFormat = kCurrentAllTimeRecoveryFormat;
+        if (!SaveState())
+        {
+            LogHistoryIoFailure(L"RepairAllTime", m_stateFilePath, GetLastError());
+        }
+    }
+}
+
+CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::CalculateStoredHistoryTotal() const
+{
+    TrafficAmount total{};
+    if (m_historyDir.empty() || !std::filesystem::exists(m_historyDir))
+    {
+        return total;
+    }
+
+    SYSTEMTIME today{};
+    GetLocalTime(&today);
+    today.wHour = 0;
+    today.wMinute = 0;
+    today.wSecond = 0;
+    today.wMilliseconds = 0;
+    const auto today_key = FormatDateKey(today);
+
+    // The in-memory buckets contain today's committed file plus any pending checkpoint.
+    for (const auto& bucket_entry : m_bucketByApp)
+    {
+        if (bucket_entry.first.size() < 10 || bucket_entry.first.compare(0, 10, today_key) != 0)
+        {
+            continue;
+        }
+        for (const auto& app_entry : bucket_entry.second)
+        {
+            AddAmount(total, app_entry.second);
+        }
+    }
+
+    std::error_code error;
+    for (const auto& year_entry : std::filesystem::directory_iterator(m_historyDir, error))
+    {
+        if (error || !year_entry.is_directory())
+        {
+            continue;
+        }
+        std::uint64_t year = 0;
+        const auto year_name = year_entry.path().filename().wstring();
+        if (!TryParseUInt64(year_name, year) || year < 1601 || year > 9999)
+        {
+            continue;
+        }
+
+        for (const auto& month_entry : std::filesystem::directory_iterator(year_entry.path(), error))
+        {
+            if (error || !month_entry.is_directory())
+            {
+                continue;
+            }
+            std::uint64_t month = 0;
+            const auto month_name = month_entry.path().filename().wstring();
+            if (!TryParseUInt64(month_name, month) || month < 1 || month > 12)
+            {
+                continue;
+            }
+
+            std::set<std::uint8_t> archived_days;
+            for (const auto& file_entry : std::filesystem::directory_iterator(month_entry.path(), error))
+            {
+                if (error || !file_entry.is_regular_file() || file_entry.path().extension() != L".tmh")
+                {
+                    continue;
+                }
+                TmhMetadata metadata{};
+                if (!TryReadTmhMetadata(file_entry.path(), metadata) ||
+                    metadata.year != year || metadata.month != month)
+                {
+                    continue;
+                }
+                for (const auto& day : metadata.days)
+                {
+                    if (archived_days.insert(day.day).second)
+                    {
+                        total.rxBytes += day.rxTotal;
+                        total.txBytes += day.txTotal;
+                    }
+                }
+            }
+
+            for (const auto& file_entry : std::filesystem::directory_iterator(month_entry.path(), error))
+            {
+                if (error || !file_entry.is_regular_file() || file_entry.path().extension() != L".tsv")
+                {
+                    continue;
+                }
+                const auto date_key = file_entry.path().stem().wstring();
+                if (date_key.size() != 10)
+                {
+                    continue;
+                }
+                SYSTEMTIME date{};
+                if (!TryParseDateKey(date_key, date) || IsSameDate(date, today) ||
+                    archived_days.find(static_cast<std::uint8_t>(date.wDay)) != archived_days.end())
+                {
+                    continue;
+                }
+
+                SummaryData summary{};
+                const auto summary_path = DaySummaryPath(m_historyDir, date);
+                if (TryReadSummaryFile(summary_path, SummaryKind::Day, date, date, summary) &&
+                    summary.sourceGeneration == GetSourceGeneration(file_entry.path()))
+                {
+                    AddAmount(total, summary.total);
+                    continue;
+                }
+
+                std::ifstream input(file_entry.path(), std::ios::binary);
+                if (!input.is_open())
+                {
+                    continue;
+                }
+                TrafficAmount day_total{};
+                bool valid = true;
+                std::wstring line;
+                std::wstring current_time_key;
+                while (ReadUtf8Line(input, line))
+                {
+                    std::wstring bucket_key;
+                    std::wstring app_name;
+                    TrafficAmount amount{};
+                    if (!TryReadDailyHistoryLine(
+                            date_key,
+                            line,
+                            m_appNameById,
+                            current_time_key,
+                            bucket_key,
+                            app_name,
+                            amount))
+                    {
+                        valid = false;
+                        break;
+                    }
+                    AddAmount(day_total, amount);
+                }
+                if (valid && input.eof())
+                {
+                    AddAmount(total, day_total);
+                }
+            }
+        }
+    }
+    return total;
 }
 
 bool CHistoryTrafficStore::LoadAppDictionary()
@@ -2882,6 +3050,7 @@ void CHistoryTrafficStore::LoadState()
     m_preferredRange = GetDefaultRange();
     m_preferredLanguage = DisplayLanguage::English;
     m_historyMigrationFormat = 0;
+    m_allTimeRecoveryFormat = 0;
     m_hasPersistedAllTime = false;
     m_allTimeCacheValid = false;
     m_cachedAllTimeTotal = {};
@@ -2922,6 +3091,16 @@ void CHistoryTrafficStore::LoadState()
             if (ReadTabField(stream, value_text))
             {
                 m_historyMigrationFormat = (std::max)(0, _wtoi(value_text.c_str()));
+            }
+            continue;
+        }
+
+        if (type == L"all_time_recovery_format")
+        {
+            std::wstring value_text;
+            if (ReadTabField(stream, value_text))
+            {
+                m_allTimeRecoveryFormat = (std::max)(0, _wtoi(value_text.c_str()));
             }
             continue;
         }
@@ -2993,6 +3172,10 @@ bool CHistoryTrafficStore::SaveState() const
     if (m_historyMigrationFormat > 0)
     {
         WriteUtf8StateLine(output, L"history_migration_format", m_historyMigrationFormat);
+    }
+    if (m_allTimeRecoveryFormat > 0)
+    {
+        WriteUtf8StateLine(output, L"all_time_recovery_format", m_allTimeRecoveryFormat);
     }
     WriteUtf8StateLine(output, L"language", static_cast<int>(m_preferredLanguage));
     WriteUtf8StateLine(output, L"range_start", FormatMinuteTime(normalized.start));

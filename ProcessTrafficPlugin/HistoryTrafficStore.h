@@ -59,6 +59,7 @@ private:
     void EnsureLoaded();
     bool EnsureCompletedSummaries();
     void Load();
+    TrafficAmount CalculateStoredHistoryTotal() const;
     bool LoadAppDictionary();
     bool SaveAppDictionary() const;
     std::uint64_t EnsureAppId(const std::wstring& app_name);
@@ -118,6 +119,7 @@ private:
     DateTimeRange m_preferredRange{};
     DisplayLanguage m_preferredLanguage{ DisplayLanguage::English };
     int m_historyMigrationFormat{};
+    int m_allTimeRecoveryFormat{};
     mutable bool m_rangeCacheValid{ false };
     mutable DateTimeRange m_cachedRange{};
     mutable std::vector<AppTotalEntry> m_cachedRangeApps;
