@@ -4,6 +4,10 @@
 #include <CommCtrl.h>
 
 #include <string>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -14,6 +18,7 @@ class CTrafficDetailWindow
 {
 public:
     explicit CTrafficDetailWindow(CProcNetPlugin& plugin);
+    ~CTrafficDetailWindow();
     void Show(HWND parent);
 
 private:
@@ -57,6 +62,9 @@ private:
     void UpsertListRow(int row, int image_index, const std::vector<std::wstring>& columns);
     void EnsureImageList();
     int GetIconIndex(const std::wstring& exe_name, const std::wstring& exe_path);
+    void LoadIconsInBackground(HWND target);
+    void ApplyLoadedIcons();
+    void StopIconWorker();
     int AddIconToImageList(HICON icon);
     HICON LoadSmallExeIcon(const std::wstring& exe_path) const;
     HICON LoadDefaultExeIcon() const;
@@ -118,4 +126,23 @@ private:
     std::vector<int> m_totalColumnWidths;
     std::unordered_map<std::wstring, int> m_iconIndexByKey;
     int m_defaultIconIndex;
+    bool m_settingRangeControls{ false };
+    struct IconRequest
+    {
+        std::wstring key;
+        std::wstring name;
+        std::wstring path;
+    };
+    struct IconResult
+    {
+        std::wstring key;
+        HICON icon{};
+    };
+    std::vector<std::wstring> m_rowIconKeys;
+    std::thread m_iconWorker;
+    std::mutex m_iconMutex;
+    std::condition_variable m_iconWake;
+    std::deque<IconRequest> m_iconRequests;
+    std::deque<IconResult> m_iconResults;
+    bool m_stopIconWorker{ false };
 };

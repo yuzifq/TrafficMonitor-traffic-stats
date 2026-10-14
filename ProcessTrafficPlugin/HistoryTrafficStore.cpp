@@ -1991,6 +1991,7 @@ bool CHistoryTrafficStore::EnsureCompletedSummaries()
     today.wMilliseconds = 0;
 
     std::vector<std::pair<std::filesystem::path, SYSTEMTIME>> daily_files;
+    std::set<unsigned int> history_years;
     std::error_code error;
     for (const auto& year_entry : std::filesystem::directory_iterator(m_historyDir, error))
     {
@@ -2004,6 +2005,7 @@ bool CHistoryTrafficStore::EnsureCompletedSummaries()
         {
             continue;
         }
+        history_years.insert(static_cast<unsigned int>(year_value));
         for (const auto& month_entry : std::filesystem::directory_iterator(year_entry.path(), error))
         {
             if (error || !month_entry.is_directory())
@@ -2209,7 +2211,7 @@ bool CHistoryTrafficStore::EnsureCompletedSummaries()
         }
     }
 
-    for (unsigned int year = 1601; year <= 9999; ++year)
+    for (const auto year : history_years)
     {
         for (unsigned short month = 1; month <= 12; month = static_cast<unsigned short>(month + 3))
         {

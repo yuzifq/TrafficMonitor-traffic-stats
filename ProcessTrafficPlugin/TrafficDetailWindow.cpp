@@ -9,6 +9,7 @@
 #include <CommCtrl.h>
 #include <CommDlg.h>
 #include <Shellapi.h>
+#include <objbase.h>
 
 #include <algorithm>
 #include <array>
@@ -18,11 +19,13 @@
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "ole32.lib")
 
 namespace
 {
 constexpr wchar_t kWindowClassName[] = L"TMProcessTrafficDetailWindow";
 constexpr UINT_PTR kRefreshTimerId = 1;
+constexpr UINT kIconsReadyMessage = WM_APP + 1;
 constexpr int kToggleViewButtonId = 1001;
 constexpr int kPauseRefreshButtonId = 1002;
 constexpr int kLanguageLabelId = 1007;
@@ -358,6 +361,11 @@ CTrafficDetailWindow::CTrafficDetailWindow(CProcNetPlugin& plugin)
       m_totalColumnWidths{ 26, 234, 150, 150, 150 },
       m_defaultIconIndex(-1)
 {
+}
+
+CTrafficDetailWindow::~CTrafficDetailWindow()
+{
+    StopIconWorker();
 }
 
 void CTrafficDetailWindow::Show(HWND parent)
@@ -727,10 +735,12 @@ void CTrafficDetailWindow::ApplyQuickRange(int button_id)
 void CTrafficDetailWindow::ApplyCurrentRangeToControls()
 {
     const auto range = m_plugin.GetPreferredRange();
+    m_settingRangeControls = true;
     SetPickerTimeIfPresent(m_startDatePicker, range.start);
     SetPickerTimeIfPresent(m_startTimePicker, range.start);
     SetPickerTimeIfPresent(m_endDatePicker, range.end);
     SetPickerTimeIfPresent(m_endTimePicker, range.end);
+    m_settingRangeControls = false;
 }
 
 void CTrafficDetailWindow::ShowTotalViewControls(bool show)
@@ -916,8 +926,10 @@ void CTrafficDetailWindow::FillRealtimeView()
     auto apps = m_plugin.BuildAllApps();
     SortApps(apps);
     EnsureListItemCount(static_cast<int>(apps.size()));
+    m_rowIconKeys.resize(apps.size());
     for (size_t i = 0; i < apps.size(); ++i)
     {
+        m_rowIconKeys[i] = apps[i].exePath.empty() ? apps[i].exeName : apps[i].exePath;
         UpsertListRow(static_cast<int>(i), GetIconIndex(apps[i].exeName, apps[i].exePath), BuildRealtimeRow(apps[i]));
     }
 }
@@ -934,8 +946,10 @@ void CTrafficDetailWindow::FillTotalView()
     SortApps(apps);
 
     EnsureListItemCount(static_cast<int>(apps.size()));
+    m_rowIconKeys.resize(apps.size());
     for (size_t i = 0; i < apps.size(); ++i)
     {
+        m_rowIconKeys[i] = apps[i].exePath.empty() ? apps[i].exeName : apps[i].exePath;
         UpsertListRow(static_cast<int>(i), GetIconIndex(apps[i].exeName, apps[i].exePath), BuildTotalRow(apps[i]));
     }
 }
@@ -988,6 +1002,10 @@ void CTrafficDetailWindow::UpsertListRow(int row, int image_index, const std::ve
 int CTrafficDetailWindow::GetIconIndex(const std::wstring& exe_name, const std::wstring& exe_path)
 {
     EnsureImageList();
+    if (IsAnonymousPidName(exe_name) || (exe_name.empty() && exe_path.empty()))
+    {
+        return m_defaultIconIndex;
+    }
 
     const std::wstring cache_key = exe_path.empty() ? exe_name : exe_path;
     const auto it = m_iconIndexByKey.find(cache_key);
@@ -996,20 +1014,122 @@ int CTrafficDetailWindow::GetIconIndex(const std::wstring& exe_name, const std::
         return it->second;
     }
 
-    HICON icon = LoadSmallExeIcon(exe_path);
-    if (icon == nullptr && !exe_name.empty())
+    if (!m_iconWorker.joinable())
     {
-        icon = LoadSmallExeIcon(CProcessFinder::FindFirstProcessPathByExeName(exe_name));
+        m_stopIconWorker = false;
+        m_iconWorker = std::thread(&CTrafficDetailWindow::LoadIconsInBackground, this, m_hwnd);
     }
-
-    int image_index = m_defaultIconIndex;
-    if (icon != nullptr)
+    m_iconIndexByKey.emplace(cache_key, m_defaultIconIndex);
     {
-        image_index = AddIconToImageList(icon);
+        std::lock_guard<std::mutex> lock(m_iconMutex);
+        m_iconRequests.push_back({ cache_key, exe_name, exe_path });
     }
+    m_iconWake.notify_one();
+    return m_defaultIconIndex;
+}
 
-    m_iconIndexByKey.emplace(cache_key, image_index);
-    return image_index;
+void CTrafficDetailWindow::LoadIconsInBackground(HWND target)
+{
+    const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    std::vector<CProcessFinder::ProcessEntry> processes;
+    ULONGLONG process_cache_tick = 0;
+    for (;;)
+    {
+        IconRequest request;
+        {
+            std::unique_lock<std::mutex> lock(m_iconMutex);
+            m_iconWake.wait(lock, [this] { return m_stopIconWorker || !m_iconRequests.empty(); });
+            if (m_stopIconWorker)
+            {
+                break;
+            }
+            request = std::move(m_iconRequests.front());
+            m_iconRequests.pop_front();
+        }
+
+        HICON icon = LoadSmallExeIcon(request.path);
+        if (icon == nullptr && !request.name.empty())
+        {
+            const auto now = GetTickCount64();
+            if (process_cache_tick == 0 || now - process_cache_tick >= 5000)
+            {
+                processes = CProcessFinder::EnumerateProcesses();
+                process_cache_tick = now;
+            }
+            for (const auto& process : processes)
+            {
+                if (_wcsicmp(process.exeName.c_str(), request.name.c_str()) == 0 &&
+                    !process.exePath.empty() && process.exePath != request.path)
+                {
+                    icon = LoadSmallExeIcon(process.exePath);
+                    break;
+                }
+            }
+        }
+
+        bool notify = false;
+        {
+            std::lock_guard<std::mutex> lock(m_iconMutex);
+            if (m_stopIconWorker)
+            {
+                if (icon != nullptr) DestroyIcon(icon);
+                break;
+            }
+            notify = m_iconResults.empty();
+            m_iconResults.push_back({ std::move(request.key), icon });
+        }
+        if (notify) PostMessageW(target, kIconsReadyMessage, 0, 0);
+    }
+    if (SUCCEEDED(com_result)) CoUninitialize();
+}
+
+void CTrafficDetailWindow::ApplyLoadedIcons()
+{
+    std::deque<IconResult> results;
+    {
+        std::lock_guard<std::mutex> lock(m_iconMutex);
+        results.swap(m_iconResults);
+    }
+    if (results.empty()) return;
+
+    for (const auto& result : results)
+    {
+        if (result.icon != nullptr)
+        {
+            const int index = AddIconToImageList(result.icon);
+            if (index >= 0) m_iconIndexByKey[result.key] = index;
+        }
+    }
+    // Rows may have been sorted, filtered, or replaced while an icon was loading.
+    for (size_t row = 0; row < m_rowIconKeys.size(); ++row)
+    {
+        const auto it = m_iconIndexByKey.find(m_rowIconKeys[row]);
+        if (it == m_iconIndexByKey.end()) continue;
+        LVITEMW item{};
+        item.mask = LVIF_IMAGE;
+        item.iItem = static_cast<int>(row);
+        if (ListView_GetItem(m_list, &item) && item.iImage != it->second)
+        {
+            item.iImage = it->second;
+            ListView_SetItem(m_list, &item);
+        }
+    }
+}
+
+void CTrafficDetailWindow::StopIconWorker()
+{
+    {
+        std::lock_guard<std::mutex> lock(m_iconMutex);
+        m_stopIconWorker = true;
+        m_iconRequests.clear();
+    }
+    m_iconWake.notify_one();
+    if (m_iconWorker.joinable()) m_iconWorker.join();
+    for (const auto& result : m_iconResults)
+    {
+        if (result.icon != nullptr) DestroyIcon(result.icon);
+    }
+    m_iconResults.clear();
 }
 
 int CTrafficDetailWindow::AddIconToImageList(HICON icon)
@@ -1336,6 +1456,7 @@ bool CTrafficDetailWindow::HandleNotify(NMHDR* header)
 
     if (IsRangeControlId(header->idFrom) && header->code == DTN_DATETIMECHANGE)
     {
+        if (m_settingRangeControls) return true;
         m_plugin.SetPreferredRange(GetSelectedRange());
         RefreshView();
         return true;
@@ -1386,12 +1507,14 @@ void CTrafficDetailWindow::OnWindowCreated(HWND hwnd)
 void CTrafficDetailWindow::OnWindowDestroyed(HWND hwnd)
 {
     KillTimer(hwnd, kRefreshTimerId);
+    StopIconWorker();
     if (m_smallImageList != nullptr)
     {
         ImageList_Destroy(m_smallImageList);
         m_smallImageList = nullptr;
     }
     m_iconIndexByKey.clear();
+    m_rowIconKeys.clear();
     m_defaultIconIndex = -1;
     ResetControlHandles();
 }
@@ -1415,6 +1538,9 @@ LRESULT CTrafficDetailWindow::HandleMessage(HWND hwnd, UINT message, WPARAM w_pa
 {
     switch (message)
     {
+    case kIconsReadyMessage:
+        ApplyLoadedIcons();
+        return 0;
     case WM_CREATE:
         OnWindowCreated(hwnd);
         return 0;
