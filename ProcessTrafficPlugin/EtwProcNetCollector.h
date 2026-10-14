@@ -43,6 +43,7 @@ private:
     void WorkerLoop();
     void HandleEventRecord(_EVENT_RECORD* event_record);
     void UpdateStatus(std::wstring status_text);
+    ULONG TryGetFixedProperty(_EVENT_RECORD* event_record, const wchar_t* property_name, void* value, ULONG size) const;
     ULONG TryGetUInt32Property(_EVENT_RECORD* event_record, const wchar_t* property_name, std::uint32_t& value) const;
 
     static void WINAPI StaticEventRecordCallback(_EVENT_RECORD* event_record);

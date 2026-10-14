@@ -19,6 +19,35 @@ constexpr UCHAR EVENT_TRACE_TYPE_SEND_IPV6_VALUE = 26;
 constexpr UCHAR EVENT_TRACE_TYPE_RECEIVE_IPV6_VALUE = 27;
 constexpr ULONG PROPERTY_ARRAY_INDEX_NONE = 0xFFFFFFFF;
 const GUID SYSTEM_TRACE_CONTROL_GUID = { 0x9e814aad, 0x3204, 0x11d2, { 0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39 } };
+const GUID TCPIP_PROVIDER_GUID = { 0x9a280ac0, 0xc8e0, 0x11d1, { 0x84, 0xe2, 0x00, 0xc0, 0x4f, 0xb9, 0x98, 0xa2 } };
+const GUID UDPIP_PROVIDER_GUID = { 0xbf3a50c5, 0xa9c9, 0x4988, { 0xa0, 0x05, 0x2d, 0xf0, 0xb7, 0xc8, 0x0f, 0x80 } };
+
+bool IsLoopbackAddress(const unsigned char* address, ULONG size)
+{
+    if (size == 4)
+    {
+        return address[0] == 127;
+    }
+
+    bool zero_prefix = true;
+    for (ULONG i = 0; i < 10; ++i)
+    {
+        zero_prefix = zero_prefix && address[i] == 0;
+    }
+    if (!zero_prefix)
+    {
+        return false;
+    }
+    if (address[10] == 0xff && address[11] == 0xff)
+    {
+        return address[12] == 127;
+    }
+    for (ULONG i = 10; i < 15; ++i)
+    {
+        zero_prefix = zero_prefix && address[i] == 0;
+    }
+    return zero_prefix && address[15] == 1;
+}
 }
 
 CEtwProcNetCollector::CEtwProcNetCollector()
@@ -240,6 +269,17 @@ void CEtwProcNetCollector::WorkerLoop()
 
 void CEtwProcNetCollector::HandleEventRecord(_EVENT_RECORD* event_record)
 {
+    if (event_record == nullptr || event_record->UserData == nullptr)
+    {
+        return;
+    }
+    // Opcodes are provider-specific; a shared kernel session can contain other event families.
+    const auto& provider = event_record->EventHeader.ProviderId;
+    if (!IsEqualGUID(provider, TCPIP_PROVIDER_GUID) && !IsEqualGUID(provider, UDPIP_PROVIDER_GUID))
+    {
+        return;
+    }
+
     const auto opcode = event_record->EventHeader.EventDescriptor.Opcode;
     const bool is_send = opcode == EVENT_TRACE_TYPE_SEND_VALUE || opcode == EVENT_TRACE_TYPE_SEND_IPV6_VALUE;
     const bool is_receive = opcode == EVENT_TRACE_TYPE_RECEIVE_VALUE || opcode == EVENT_TRACE_TYPE_RECEIVE_IPV6_VALUE;
@@ -265,6 +305,23 @@ void CEtwProcNetCollector::HandleEventRecord(_EVENT_RECORD* event_record)
             return;
         }
     }
+    if (transfer_size == 0)
+    {
+        return;
+    }
+
+    // Proxy/IPC traffic on loopback does not cross a network adapter.
+    const ULONG address_size = opcode == EVENT_TRACE_TYPE_SEND_IPV6_VALUE ||
+        opcode == EVENT_TRACE_TYPE_RECEIVE_IPV6_VALUE ? 16 : 4;
+    std::array<unsigned char, 16> source_address{};
+    std::array<unsigned char, 16> destination_address{};
+    if (TryGetFixedProperty(event_record, L"saddr", source_address.data(), address_size) != ERROR_SUCCESS ||
+        TryGetFixedProperty(event_record, L"daddr", destination_address.data(), address_size) != ERROR_SUCCESS ||
+        IsLoopbackAddress(source_address.data(), address_size) ||
+        IsLoopbackAddress(destination_address.data(), address_size))
+    {
+        return;
+    }
 
     std::lock_guard<std::mutex> lock(m_rateMutex);
     auto& snapshot = m_snapshotByPid[process_id];
@@ -286,31 +343,34 @@ void CEtwProcNetCollector::UpdateStatus(std::wstring status_text)
 
 ULONG CEtwProcNetCollector::TryGetUInt32Property(_EVENT_RECORD* event_record, const wchar_t* property_name, std::uint32_t& value) const
 {
+    std::uint32_t parsed = 0;
+    const auto status = TryGetFixedProperty(event_record, property_name, &parsed, sizeof(parsed));
+    if (status == ERROR_SUCCESS)
+    {
+        value = parsed;
+    }
+    return status;
+}
+
+ULONG CEtwProcNetCollector::TryGetFixedProperty(_EVENT_RECORD* event_record, const wchar_t* property_name, void* value, ULONG size) const
+{
     PROPERTY_DATA_DESCRIPTOR descriptor{};
     descriptor.ArrayIndex = PROPERTY_ARRAY_INDEX_NONE;
     descriptor.PropertyName = reinterpret_cast<ULONGLONG>(property_name);
 
     ULONG property_size = 0;
     auto status = TdhGetPropertySize(event_record, 0, nullptr, 1, &descriptor, &property_size);
-    if (status != ERROR_SUCCESS || property_size == 0)
-    {
-        return status;
-    }
-
-    std::array<unsigned char, sizeof(std::uint32_t)> buffer{};
-    if (property_size > buffer.size())
-    {
-        return ERROR_INSUFFICIENT_BUFFER;
-    }
-
-    status = TdhGetProperty(event_record, 0, nullptr, 1, &descriptor, property_size, buffer.data());
     if (status != ERROR_SUCCESS)
     {
         return status;
     }
 
-    std::memcpy(&value, buffer.data(), property_size);
-    return ERROR_SUCCESS;
+    if (property_size != size)
+    {
+        return ERROR_INVALID_DATA;
+    }
+
+    return TdhGetProperty(event_record, 0, nullptr, 1, &descriptor, size, static_cast<PBYTE>(value));
 }
 
 void WINAPI CEtwProcNetCollector::StaticEventRecordCallback(_EVENT_RECORD* event_record)

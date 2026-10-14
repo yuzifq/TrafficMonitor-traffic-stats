@@ -37,6 +37,9 @@ If you do not want to build the plugin yourself, you can download the prebuilt p
 
 - This plugin relies on **ETW (Event Tracing for Windows)** to collect per-process traffic data.
 - In many cases, TrafficMonitor must be started with **administrator privileges**; otherwise traffic collection may fail and you may see errors such as `StartTrace failed`.
+- Local loopback traffic (`127.0.0.0/8`, `::1`, and the corresponding IPv4-mapped addresses) is excluded so that local forwarding by proxies, ADB, and similar programs does not count as upload or download.
+- Per-process statistics cover TCP/UDP network activity, including virtual adapters and tunnels. Their sum is not guaranteed to match the physical adapter selected in TrafficMonitor. Compare traffic increments over the same time interval.
+- Filtering applies to newly collected data only. Existing history does not contain connection addresses, so its loopback traffic cannot be subtracted accurately.
 
 ## Build
 
