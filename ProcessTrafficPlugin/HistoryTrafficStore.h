@@ -38,6 +38,7 @@ public:
     };
 
     void Initialize(const std::wstring& base_dir);
+    std::wstring GetStorageDirectory() const;
     void Update(const std::vector<AppTotalEntry>& apps);
     std::vector<AppTotalEntry> GetRangeAppTotals(const DateTimeRange& range) const;
     TrafficAmount GetRangeTotal(const DateTimeRange& range) const;
@@ -64,13 +65,8 @@ private:
     bool SaveAppDictionary() const;
     std::uint64_t EnsureAppId(const std::wstring& app_name);
     void LoadHistoryFile(const std::wstring& path, TrafficAmount& loaded_total);
-    void LoadHistoryDirectory(const std::wstring& directory, TrafficAmount& loaded_total);
     bool AddMinuteFileTotals(
         const std::wstring& path,
-        const DateTimeRange& range,
-        std::unordered_map<std::wstring, TrafficAmount>& totals_by_app) const;
-    void AddRangeHistoryFromDirectory(
-        const std::wstring& directory,
         const DateTimeRange& range,
         std::unordered_map<std::wstring, TrafficAmount>& totals_by_app) const;
     bool AppendHistoryEntries(const std::wstring& bucket_key, const std::vector<std::pair<std::wstring, TrafficAmount>>& entries);

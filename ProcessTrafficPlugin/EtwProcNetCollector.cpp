@@ -58,7 +58,7 @@ CEtwProcNetCollector::CEtwProcNetCollector()
       m_sessionHandle(0),
       m_traceHandle(INVALID_PROCESSTRACE_HANDLE),
       m_ownsSession(false),
-      m_lastSampleTick(0),
+      m_lastSampleTick(GetTickCount64()),
       m_sampleSequence(0)
 {
 }
@@ -81,7 +81,7 @@ bool CEtwProcNetCollector::Start()
         m_snapshotByPid.clear();
         m_lastRxTotalByPid.clear();
         m_lastTxTotalByPid.clear();
-        m_lastSampleTick = 0;
+        m_lastSampleTick = GetTickCount64();
         m_sampleSequence = 0;
     }
     UpdateStatus(L"Starting ETW session...");
@@ -113,7 +113,6 @@ void CEtwProcNetCollector::Stop()
 
 std::unordered_map<DWORD, CEtwProcNetCollector::ProcessTrafficSnapshot> CEtwProcNetCollector::GetProcessTrafficSnapshot() const
 {
-    RefreshRates();
     std::lock_guard<std::mutex> lock(m_rateMutex);
     return m_snapshotByPid;
 }
@@ -203,26 +202,11 @@ void CEtwProcNetCollector::StopTraceSession()
     m_propertiesBuffer.reset();
 }
 
-void CEtwProcNetCollector::RefreshRates() const
+void CEtwProcNetCollector::SampleTraffic()
 {
     std::lock_guard<std::mutex> lock(m_rateMutex);
 
     const auto now = GetTickCount64();
-    if (m_lastSampleTick == 0)
-    {
-        m_lastSampleTick = now;
-        ++m_sampleSequence;
-        for (auto& entry : m_snapshotByPid)
-        {
-            m_lastRxTotalByPid[entry.first] = entry.second.rxTotalBytes;
-            m_lastTxTotalByPid[entry.first] = entry.second.txTotalBytes;
-            entry.second.rxSampleBytes = 0;
-            entry.second.txSampleBytes = 0;
-            entry.second.sampleSequence = m_sampleSequence;
-        }
-        return;
-    }
-
     const auto elapsed = now - m_lastSampleTick;
     if (elapsed < 1000)
     {

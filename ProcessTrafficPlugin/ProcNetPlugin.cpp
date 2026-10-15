@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cwctype>
+#include <filesystem>
 #include <unordered_map>
 #include <utility>
 
@@ -73,13 +74,12 @@ constexpr LocalizedText kPluginDescription{
     L"显示实时流量排行，并提供流量详情窗口。"
 };
 constexpr LocalizedText kCommandName{ L"Traffic Details", L"流量详情" };
-constexpr LocalizedText kRangeDownload{ L"Range Download: ", L"区间下载: " };
-constexpr LocalizedText kRangeUpload{ L"Range Upload: ", L"区间上传: " };
-constexpr LocalizedText kRangeTotal{ L"Range Total: ", L"区间总流量: " };
-constexpr LocalizedText kAllTimeDownload{ L"All-Time Download: ", L"历史累计下载: " };
-constexpr LocalizedText kAllTimeUpload{ L"All-Time Upload: ", L"历史累计上传: " };
-constexpr LocalizedText kAllTimeTotal{ L"All-Time Total: ", L"历史累计总流量: " };
-constexpr LocalizedText kCurrentStatus{ L"Status: ", L"当前状态: " };
+constexpr LocalizedText kRangeDownload{ L"Process range download: ", L"进程区间下载: " };
+constexpr LocalizedText kRangeUpload{ L"Process range upload: ", L"进程区间上传: " };
+constexpr LocalizedText kRangeTotal{ L"Process range total: ", L"进程区间总量: " };
+constexpr LocalizedText kAllTimeDownload{ L"Process all-time download: ", L"进程累计下载: " };
+constexpr LocalizedText kAllTimeUpload{ L"Process all-time upload: ", L"进程累计上传: " };
+constexpr LocalizedText kAllTimeTotal{ L"Process all-time total: ", L"进程累计总量: " };
 constexpr LocalizedText kStatusRunning{ L"Running", L"运行中" };
 constexpr LocalizedText kStatusStarting{ L"Starting", L"启动中" };
 constexpr LocalizedText kStatusStopped{ L"Stopped", L"已停止" };
@@ -116,6 +116,17 @@ const wchar_t* GetSimpleStatus(
     }
     return SelectLocalizedText(language, kStatusRunning);
 }
+
+const wchar_t* NetworkStatus(CNetworkTrafficCollector::Status status, CHistoryTrafficStore::DisplayLanguage language)
+{
+    switch (status)
+    {
+    case CNetworkTrafficCollector::Status::Running: return SelectLocalizedText(language, kStatusRunning);
+    case CNetworkTrafficCollector::Status::Starting: return SelectLocalizedText(language, kStatusStarting);
+    case CNetworkTrafficCollector::Status::Disconnected: return SelectLocalizedText(language, { L"Disconnected", L"未连接" });
+    default: return SelectLocalizedText(language, kStatusError);
+    }
+}
 }
 
 CProcNetPlugin& CProcNetPlugin::Instance()
@@ -128,8 +139,7 @@ CProcNetPlugin& CProcNetPlugin::Instance()
 }
 
 CProcNetPlugin::CProcNetPlugin()
-    : m_app(nullptr),
-      m_tooltip(L"采集器尚未启动。"),
+    : m_tooltip(L"采集器尚未启动。"),
       m_collectorStarted(false),
       m_historyInitialized(false),
       m_processCacheTick(0)
@@ -145,6 +155,7 @@ CProcNetPlugin::CProcNetPlugin()
 CProcNetPlugin::~CProcNetPlugin()
 {
     m_collector.Stop();
+    m_networkStore.Flush(true);
 }
 
 int CProcNetPlugin::GetAPIVersion() const
@@ -166,6 +177,12 @@ void CProcNetPlugin::DataRequired()
 {
     EnsureCollectorStarted();
     EnsureHistoryInitialized();
+    {
+        std::lock_guard<std::mutex> lock(m_historyMutex);
+        const auto interval = m_networkCollector.Sample();
+        if (interval) m_networkStore.Add(*interval);
+    }
+    m_collector.SampleTraffic();
     const auto apps = BuildAllApps();
     UpdateHistory(apps);
     UpdateDisplayText(apps);
@@ -293,7 +310,7 @@ const wchar_t* CProcNetPlugin::GetInfoText(PluginInfoIndex index, CHistoryTraffi
 
 const wchar_t* CProcNetPlugin::GetInfo(PluginInfoIndex index)
 {
-    return GetInfoText(index, m_historyStore.GetPreferredLanguage());
+    return GetInfoText(index, GetPreferredLanguage());
 }
 
 const wchar_t* CProcNetPlugin::GetTooltipInfo()
@@ -313,7 +330,7 @@ const wchar_t* CProcNetPlugin::GetCommandName(int command_index)
         return nullptr;
     }
 
-    return GetLocalizedText(m_historyStore.GetPreferredLanguage(), kCommandName);
+    return GetLocalizedText(GetPreferredLanguage(), kCommandName);
 }
 
 void CProcNetPlugin::OnPluginCommand(int command_index, void* hWnd, void* para)
@@ -325,16 +342,14 @@ void CProcNetPlugin::OnPluginCommand(int command_index, void* hWnd, void* para)
     }
 }
 
-void CProcNetPlugin::OnInitialize(ITrafficMonitor* pApp)
-{
-    m_app = pApp;
-}
-
 void CProcNetPlugin::OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data)
 {
     if (index == EI_CONFIG_DIR && data != nullptr)
     {
-        m_configDir = data;
+        {
+            std::lock_guard<std::mutex> lock(m_historyMutex);
+            m_configDir = data;
+        }
         EnsureHistoryInitialized();
     }
 }
@@ -420,6 +435,7 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildAllApps() cons
 
 std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(const CHistoryTrafficStore::DateTimeRange& range) const
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     std::vector<AppTrafficEntry> result;
     const auto history_apps = m_historyStore.GetRangeAppTotals(range);
 
@@ -438,43 +454,107 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(co
 
 std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range, CHistoryTrafficStore::DisplayLanguage language) const
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     const auto selected = m_historyStore.GetRangeTotal(range);
     const auto all = m_historyStore.GetAllTimeTotal();
+    const auto network = m_networkStore.GetRange(range);
+    bool all_healthy{};
+    const auto network_all = m_networkStore.GetAllTimeTotal(&all_healthy);
     std::wstring text;
+    if (network.available)
+    {
+        AppendTrafficBlock(text, language, network.amount,
+            { L"Network range download: ", L"网卡区间下载: " },
+            { L"Network range upload: ", L"网卡区间上传: " },
+            { L"Network range total: ", L"网卡区间总量: " });
+        wchar_t coverage[96]{};
+        const auto percent = network.requestedMs != 0 ? 100.0 * network.coveredMs / network.requestedMs : 0.0;
+        swprintf_s(coverage, GetLocalizedText(language, { L"\r\nSample coverage: %.2f%%", L"\r\n采样覆盖: %.2f%%" }), percent);
+        text += coverage;
+        if (network.coveredMs < network.requestedMs) text += GetLocalizedText(language, { L" (gaps)", L" (有缺失)" });
+        if (network.coarse) text += GetLocalizedText(language, { L" (coarse intervals)", L" (含长采样区间)" });
+        text += L"\r\n";
+        text += GetLocalizedText(language, { L"Boundary D/U: ", L"边界待归属 下/上: " });
+        text += Utils::FormatBytes(network.boundary.rxBytes) + L" / " + Utils::FormatBytes(network.boundary.txBytes);
+    }
+    else text = GetLocalizedText(language, { L"Network range: no samples", L"网卡区间: 尚无采样数据" });
+    text += L"\r\n";
+    text += GetLocalizedText(language, { L"Network all-time D/U: ", L"网卡累计 下/上: " });
+    text += Utils::FormatBytes(network_all.rxBytes) + L" / " + Utils::FormatBytes(network_all.txBytes) + L"\r\n\r\n";
     AppendTrafficBlock(text, language, selected, kRangeDownload, kRangeUpload, kRangeTotal);
-    text += L"\r\n\r\n";
+    text += L"\r\n";
     AppendTrafficBlock(text, language, all, kAllTimeDownload, kAllTimeUpload, kAllTimeTotal);
-    text += L"\r\n\r\n";
-    text += GetLocalizedText(language, kCurrentStatus);
+    text += L"\r\n";
+    text += GetLocalizedText(language, { L"Network / ETW: ", L"网卡 / ETW: " });
+    text += NetworkStatus(m_networkCollector.GetSnapshot().status, language);
+    text += L" / ";
     text += GetSimpleStatus(language, m_collector.GetStatusText());
+    if (!network.healthy || !all_healthy) text += GetLocalizedText(language, { L"; history error", L"；历史读写异常" });
     return text;
+}
+
+std::wstring CProcNetPlugin::BuildLiveNetworkText(CHistoryTrafficStore::DisplayLanguage language) const
+{
+    std::lock_guard<std::mutex> lock(m_historyMutex);
+    const auto& live = m_networkCollector.GetSnapshot();
+    std::wstring text = GetLocalizedText(language, { L"Network status: ", L"网卡状态: " });
+    text += NetworkStatus(live.status, language);
+    text += GetLocalizedText(language, { L"\r\nDownload: ", L"\r\n网卡下载: " });
+    text += Utils::FormatRate(live.rxPerSec);
+    text += GetLocalizedText(language, { L"   Upload: ", L"   网卡上传: " });
+    text += Utils::FormatRate(live.txPerSec);
+    if (!m_networkStore.Healthy()) text += GetLocalizedText(language, { L"   History write error", L"   历史保存异常" });
+    return text;
+}
+
+CNetworkTrafficCollector::Snapshot CProcNetPlugin::GetNetworkSnapshot() const
+{
+    std::lock_guard<std::mutex> lock(m_historyMutex);
+    return m_networkCollector.GetSnapshot();
+}
+
+bool CProcNetPlugin::SetNetworkAdapter(const std::wstring& id)
+{
+    std::lock_guard<std::mutex> lock(m_historyMutex);
+    if (!m_networkStore.SetPreferredAdapter(id)) return false;
+    m_networkStore.Flush(true);
+    m_networkCollector.SelectAdapter(id);
+    return true;
 }
 
 bool CProcNetPlugin::ExportHistory(
     const CHistoryTrafficStore::DateTimeRange& range,
     const std::wstring& output_path,
-    std::wstring& error_message) const
+    std::wstring& error_message, bool network) const
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
+    if (m_networkStore.IsManagedPath(output_path) || m_networkStore.IsManagedPath(output_path + L".tmp"))
+    { error_message = L"Protected history path."; return false; }
+    if (network) return m_networkStore.ExportRange(range, output_path, error_message);
     return m_historyStore.ExportRange(range, output_path, error_message);
 }
 
 CHistoryTrafficStore::DateTimeRange CProcNetPlugin::GetPreferredRange() const
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     return m_historyStore.GetPreferredRange();
 }
 
 void CProcNetPlugin::SetPreferredRange(const CHistoryTrafficStore::DateTimeRange& range)
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     m_historyStore.SetPreferredRange(range);
 }
 
 CHistoryTrafficStore::DisplayLanguage CProcNetPlugin::GetPreferredLanguage() const
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     return m_historyStore.GetPreferredLanguage();
 }
 
 void CProcNetPlugin::SetPreferredLanguage(CHistoryTrafficStore::DisplayLanguage language)
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     m_historyStore.SetPreferredLanguage(language);
 }
 
@@ -523,7 +603,7 @@ std::wstring CProcNetPlugin::BuildTooltipText(const std::vector<AppTrafficEntry>
 void CProcNetPlugin::UpdateDisplayText(const std::vector<AppTrafficEntry>& apps)
 {
     const auto visible_count = static_cast<int>(apps.size()) < kMaxApps ? static_cast<int>(apps.size()) : kMaxApps;
-    const bool english = m_historyStore.GetPreferredLanguage() == CHistoryTrafficStore::DisplayLanguage::English;
+    const bool english = GetPreferredLanguage() == CHistoryTrafficStore::DisplayLanguage::English;
 
     for (int i = 0; i < kMaxApps; ++i)
     {
@@ -538,6 +618,7 @@ void CProcNetPlugin::UpdateDisplayText(const std::vector<AppTrafficEntry>& apps)
 
 void CProcNetPlugin::UpdateHistory(const std::vector<AppTrafficEntry>& apps)
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     std::uint64_t sample_sequence = 0;
     for (const auto& app : apps)
     {
@@ -560,6 +641,7 @@ void CProcNetPlugin::UpdateHistory(const std::vector<AppTrafficEntry>& apps)
 
 void CProcNetPlugin::EnsureCollectorStarted()
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     if (!m_collectorStarted)
     {
         m_collectorStarted = m_collector.Start();
@@ -568,12 +650,22 @@ void CProcNetPlugin::EnsureCollectorStarted()
 
 void CProcNetPlugin::EnsureHistoryInitialized()
 {
+    std::lock_guard<std::mutex> lock(m_historyMutex);
     if (m_historyInitialized)
     {
         return;
     }
 
-    m_historyStore.Initialize(m_configDir);
+    auto directory = m_configDir;
+    wchar_t executable[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, executable, MAX_PATH);
+    const auto executable_dir = std::filesystem::path(executable).parent_path();
+    std::error_code error;
+    if (std::filesystem::exists(executable_dir / L"app_traffic_state.tsv", error) ||
+        std::filesystem::exists(executable_dir / L"app_traffic_history", error)) directory = executable_dir.wstring();
+    m_historyStore.Initialize(directory);
+    m_networkStore.Initialize(m_historyStore.GetStorageDirectory());
+    m_networkCollector.SelectAdapter(m_networkStore.GetPreferredAdapter());
     m_historyInitialized = true;
 }
 

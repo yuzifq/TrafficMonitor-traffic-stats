@@ -27,7 +27,10 @@
       <WarningLevel>Level4</WarningLevel>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <Optimization>MaxSpeed</Optimization>
+      <Optimization>MinSpace</Optimization>
+      <FavorSizeOrSpeed>Size</FavorSizeOrSpeed>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -39,6 +42,8 @@
     <ClCompile Include="HistoryViewChecks.cpp" />
     <ClCompile Include="..\ProcessTrafficPlugin\EtwProcNetCollector.cpp" />
     <ClCompile Include="..\ProcessTrafficPlugin\HistoryTrafficStore.cpp" />
+    <ClCompile Include="..\ProcessTrafficPlugin\NetworkTrafficCollector.cpp" />
+    <ClCompile Include="..\ProcessTrafficPlugin\NetworkTrafficStore.cpp" />
     <ClCompile Include="..\ProcessTrafficPlugin\ProcNetItem.cpp" />
     <ClCompile Include="..\ProcessTrafficPlugin\ProcNetPlugin.cpp" />
     <ClCompile Include="..\ProcessTrafficPlugin\ProcessFinder.cpp" />

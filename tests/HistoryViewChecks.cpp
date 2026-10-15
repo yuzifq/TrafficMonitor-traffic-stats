@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // Inspect lifecycle and row mappings without exposing test APIs in the plugin.
@@ -63,9 +64,9 @@ void Check(bool condition, const char* message)
 }
 
 template<class Predicate>
-void PumpUntil(Predicate done)
+void PumpUntil(Predicate done, ULONGLONG timeout_ms = 15000)
 {
-    const auto deadline = GetTickCount64() + 15000;
+    const auto deadline = GetTickCount64() + timeout_ms;
     while (!done() && GetTickCount64() < deadline)
     {
         MSG message{};
@@ -84,7 +85,7 @@ HWND CreateHiddenWindow(CTrafficDetailWindow& view)
     view.EnsureWindowClassRegistered();
     view.EnsureCommonControlsInitialized();
     HWND hwnd = CreateWindowExW(0, kWindowClassName, L"History view checks", WS_OVERLAPPEDWINDOW,
-        0, 0, 800, 650, nullptr, nullptr, GetModuleHandleW(nullptr), &view);
+        0, 0, 900, 740, nullptr, nullptr, GetModuleHandleW(nullptr), &view);
     Check(hwnd != nullptr, "Could not create hidden test window");
     KillTimer(hwnd, kRefreshTimerId);
     return hwnd;
@@ -215,6 +216,163 @@ void CheckSummaries(const std::filesystem::path& fixture)
     checkTotal(day, 1);
     std::cout << "PASS: leap-quarter totals, summary-only years, corrupt-quarter fallback, corrupt-day fallback" << std::endl;
 }
+
+void CaptureWindow(HWND hwnd, const std::filesystem::path& path)
+{
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME);
+    MSG message{};
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+    {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    RECT bounds{};
+    GetWindowRect(hwnd, &bounds);
+    const int width = bounds.right - bounds.left;
+    const int height = bounds.bottom - bounds.top;
+    HDC screen = GetDC(nullptr);
+    HDC memory = CreateCompatibleDC(screen);
+    HBITMAP bitmap = CreateCompatibleBitmap(screen, width, height);
+    HGDIOBJ old = SelectObject(memory, bitmap);
+    Check(PrintWindow(hwnd, memory, 0) != FALSE, "Could not render test window");
+    SelectObject(memory, old);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    std::vector<unsigned char> pixels(static_cast<size_t>(width) * height * 4);
+    Check(GetDIBits(memory, bitmap, 0, height, pixels.data(), &info, DIB_RGB_COLORS) != 0, "Could not capture test pixels");
+    std::unordered_set<unsigned> colors;
+    for (size_t i = 0; i < pixels.size(); i += 4)
+        colors.insert(static_cast<unsigned>(pixels[i]) | static_cast<unsigned>(pixels[i + 1]) << 8 | static_cast<unsigned>(pixels[i + 2]) << 16);
+    Check(colors.size() >= 8, "Window capture is blank");
+    BITMAPFILEHEADER header{};
+    header.bfType = 0x4d42;
+    header.bfOffBits = sizeof(header) + sizeof(info.bmiHeader);
+    header.bfSize = header.bfOffBits + static_cast<DWORD>(pixels.size());
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    output.write(reinterpret_cast<const char*>(&info.bmiHeader), sizeof(info.bmiHeader));
+    output.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+}
+
+void CheckNetworkView(CProcNetPlugin& plugin, const std::filesystem::path& fixture)
+{
+    plugin.m_networkStore.Initialize(fixture.wstring());
+    std::vector<CHistoryTrafficStore::AppTotalEntry> applications;
+    for (int i = 0; i < 40; ++i)
+        applications.push_back({ L"test-" + std::to_wstring(i) + L".exe", L"C:\\Windows\\System32\\notepad.exe",
+            static_cast<std::uint64_t>(i + 1) * 8192, static_cast<std::uint64_t>(i + 1) * 1024 });
+    plugin.m_historyStore.Update(applications);
+    const auto now = CNetworkTrafficCollector::UtcNowMs();
+    CNetworkTrafficCollector::Adapter adapter{ L"A", L"Ethernet (test adapter)", 1, 100000, 200000, true, true };
+    plugin.m_networkCollector.Observe({ adapter }, 1000, now - 1000);
+    adapter.rxBytes += 8192; adapter.txBytes += 1024;
+    const auto interval = plugin.m_networkCollector.Observe({ adapter }, 2000, now);
+    Check(interval && plugin.m_networkStore.Add(*interval), "Cannot seed independent network samples");
+    CTrafficDetailWindow view(plugin);
+    HWND hwnd = CreateHiddenWindow(view);
+    view.ApplyQuickRange(kDayRangeButtonId);
+    view.ToggleView();
+    Check(Button_GetCheck(view.m_followRangeCheck) == BST_CHECKED, "Quick range did not follow current time");
+    for (const auto language : { CHistoryTrafficStore::DisplayLanguage::Chinese, CHistoryTrafficStore::DisplayLanguage::English })
+    {
+        ComboBox_SetCurSel(view.m_languageCombo, static_cast<int>(language));
+        plugin.SetPreferredLanguage(language);
+        view.RefreshView();
+        const auto summary = plugin.BuildTotalsText(view.GetSelectedRange(), language);
+        Check(summary.find(language == CHistoryTrafficStore::DisplayLanguage::English ? L"Network range" : L"\u7f51\u5361\u533a\u95f4") != std::wstring::npos &&
+            summary.find(language == CHistoryTrafficStore::DisplayLanguage::English ? L"Process range" : L"\u8fdb\u7a0b\u533a\u95f4") != std::wstring::npos,
+            "Network and process totals are not distinguished");
+        for (const int width : { 900, 1200 })
+        {
+            SetWindowPos(hwnd, nullptr, 0, 0, width, 740, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            RECT previous{};
+            for (const auto control : { view.m_summary, view.m_startLabel, view.m_startDatePicker, view.m_startTimePicker, view.m_dayRangeButton })
+            {
+                RECT bounds{};
+                GetWindowRect(control, &bounds);
+                MapWindowPoints(nullptr, hwnd, reinterpret_cast<POINT*>(&bounds), 2);
+                Check(bounds.left >= 0 && bounds.right <= client.right && bounds.top >= 0 && bounds.bottom <= client.bottom,
+                    "A control extends outside the window");
+                Check(previous.right <= bounds.left, "Summary/date/quick-range controls overlap");
+                previous = bounds;
+            }
+            HDC dc = GetDC(view.m_summary);
+            HGDIOBJ font = SelectObject(dc, reinterpret_cast<HFONT>(SendMessageW(view.m_summary, WM_GETFONT, 0, 0)));
+            TEXTMETRICW metrics{};
+            GetTextMetricsW(dc, &metrics);
+            RECT area{};
+            SendMessageW(view.m_summary, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&area));
+            const auto lines = SendMessageW(view.m_summary, EM_GETLINECOUNT, 0, 0);
+            Check(lines * metrics.tmHeight <= area.bottom - area.top, "Summary text is clipped vertically");
+            SelectObject(dc, font);
+            ReleaseDC(view.m_summary, dc);
+        }
+        SetWindowPos(hwnd, nullptr, 0, 0, 900, 740, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        CaptureWindow(hwnd, std::filesystem::path(L"build") /
+            (language == CHistoryTrafficStore::DisplayLanguage::English ? L"network-history-en.bmp" : L"network-history-zh.bmp"));
+    }
+    SYSTEMTIME selected{};
+    DateTime_GetSystemtime(view.m_endTimePicker, &selected);
+    selected.wMinute = static_cast<WORD>((selected.wMinute + 59) % 60);
+    DateTime_SetSystemtime(view.m_endTimePicker, GDT_VALID, &selected);
+    NMHDR changed{ view.m_endTimePicker, kEndTimePickerId, DTN_DATETIMECHANGE };
+    SendMessageW(hwnd, WM_NOTIFY, kEndTimePickerId, reinterpret_cast<LPARAM>(&changed));
+    Check(Button_GetCheck(view.m_followRangeCheck) == BST_UNCHECKED, "Editing time did not stop following");
+    const auto manual = view.GetSelectedRange();
+    view.HandleRefreshTimer(kRefreshTimerId);
+    Check(view.GetSelectedRange().end.wMinute == manual.end.wMinute, "Timer changed a fixed history range");
+    Button_SetCheck(view.m_followRangeCheck, BST_CHECKED);
+    SetFocus(nullptr);
+    view.HandleRefreshTimer(kRefreshTimerId);
+    Check(ListView_GetItemCount(view.m_list) >= 31, "Following did not restore current-minute process rows");
+    ListView_EnsureVisible(view.m_list, 30, FALSE);
+    ListView_SetItemState(view.m_list, 30, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    const auto top = ListView_GetTopIndex(view.m_list);
+    view.HandleRefreshTimer(kRefreshTimerId);
+    SYSTEMTIME current{};
+    GetLocalTime(&current);
+    Check(view.GetSelectedRange().end.wMinute == current.wMinute, "Following did not advance the end time");
+    Check(ListView_GetTopIndex(view.m_list) == top && ListView_GetNextItem(view.m_list, -1, LVNI_SELECTED) == 30,
+        "Live history refresh lost scrolling or selection");
+    view.ToggleView();
+    CaptureWindow(hwnd, L"build/network-realtime-en.bmp");
+    Check(!plugin.SetNetworkAdapter(L"bad\tidentifier"), "Invalid adapter identifier was accepted");
+    Check(plugin.SetNetworkAdapter(L"A") && plugin.GetNetworkSnapshot().preferredId == L"A", "Fixed adapter selection did not persist");
+    Check(plugin.SetNetworkAdapter(L"") && plugin.GetNetworkSnapshot().preferredId.empty(), "Automatic adapter selection did not persist");
+    DestroyWindow(hwnd);
+    std::cout << "PASS: bilingual network/process totals, 900/1200 layouts, text fit, adapter preferences, live range, fixed range, rendered screenshots" << std::endl;
+}
+
+void CheckUnicodeState(const std::filesystem::path& fixture)
+{
+    CHistoryTrafficStore store;
+    store.Initialize(fixture.wstring());
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    CHistoryTrafficStore::DateTimeRange range{ now, now };
+    store.SetPreferredRange(range);
+    store.SetPreferredLanguage(CHistoryTrafficStore::DisplayLanguage::Chinese);
+    CHistoryTrafficStore::AppTotalEntry app{ L"\u6d4b\u8bd5.exe", L"C:\\\u7a0b\u5e8f\\\u6d4b\u8bd5.exe", 123, 456 };
+    store.Update({ app });
+    CHistoryTrafficStore reopened;
+    reopened.Initialize(fixture.wstring());
+    const auto apps = reopened.GetRangeAppTotals(range);
+    Check(reopened.GetPreferredLanguage() == CHistoryTrafficStore::DisplayLanguage::Chinese && apps.size() == 1 &&
+        apps[0].appName == app.appName && apps[0].exePath == app.exePath && apps[0].rxTotalBytes == 123 && apps[0].txTotalBytes == 456,
+        "UTF-8 state/checkpoint round trip changed process names, paths or totals");
+    std::cout << "PASS: UTF-8 process state/checkpoint and byte totals after parser cleanup" << std::endl;
+}
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -238,7 +396,8 @@ int wmain(int argc, wchar_t** argv)
             PumpUntil([&] {
                 std::lock_guard<std::mutex> lock(view.m_iconMutex);
                 return view.m_iconRequests.empty() && view.m_iconResults.empty();
-            });
+            }, 60000);
+            std::cout << "background_icons_ms=" << GetTickCount64() - start << std::endl;
             DestroyWindow(hwnd);
         }
         else
@@ -247,6 +406,8 @@ int wmain(int argc, wchar_t** argv)
             plugin.m_historyStore.Initialize(fixture.wstring());
             CheckAsyncIcons(plugin);
             CheckSummaries(fixture / L"summaries");
+            CheckNetworkView(plugin, fixture);
+            CheckUnicodeState(fixture / L"unicode");
         }
         CloseHandle(iconGate);
         return 0;

@@ -10,6 +10,7 @@ It is not part of the official TrafficMonitor project.
 ## Features
 
 - Real-time upload and download statistics for each process
+- Independent adapter speeds and minute history, with automatic or fixed adapter selection
 - Supports cumulative historical traffic statistics by time period
 - Detailed traffic window with process icons
 - English / Chinese interface support
@@ -40,6 +41,22 @@ If you do not want to build the plugin yourself, you can download the prebuilt p
 - Local loopback traffic (`127.0.0.0/8`, `::1`, and the corresponding IPv4-mapped addresses) is excluded so that local forwarding by proxies, ADB, and similar programs does not count as upload or download.
 - Per-process statistics cover TCP/UDP network activity, including virtual adapters and tunnels. Their sum is not guaranteed to match the physical adapter selected in TrafficMonitor. Compare traffic increments over the same time interval.
 - Filtering applies to newly collected data only. Existing history does not contain connection addresses, so its loopback traffic cannot be subtracted accurately.
+
+## Adapter Statistics And Minute History
+
+Adapter totals use the same cumulative-counter delta approach as TrafficMonitor. The plugin independently reads Windows 64-bit byte counters through `GetIfTable2`; it does not read the host's live totals or `history_traffic.dat`. Select the same adapter in both applications and compare increments over the same interval. Automatic selection prefers connected hardware adapters and keeps its choice stable. Virtual adapters can be selected manually.
+
+Adapter history is stored alongside process history in `network_traffic_history/YYYY/MM/YYYY-MM-DD.tsv`. Completed intervals are appended; the current interval is checkpointed every 10 seconds. Commit IDs prevent duplicate counting during recovery. Daily `.sum` files are rebuildable summary caches. An abnormal termination can lose data collected since the last checkpoint.
+
+- Consecutive short samples within a minute are merged. Samples crossing a minute boundary and long intervals retain their actual endpoints; bytes are never distributed proportionally.
+- Network range totals include only records fully contained in the selected range. Boundary bytes are shown separately and excluded from those totals.
+- Sample coverage distinguishes missing observations from measured zero traffic. Long sampling intervals are flagged.
+- Range controls use local time. Storage and adapter exports use UTC, preserving adapter identity, precision and boundary flags. Ambiguous daylight-saving minutes follow Windows time-zone conversion rules.
+- Adapter selection affects subsequent collection. Historical totals include records from previous selections. The export menu offers process history and adapter history separately.
+- Adapter history starts when this feature is enabled. Existing process history is retained and is not backfilled into adapter totals. ETW process totals can still differ from adapter counters.
+- Day, week, month and year shortcuts follow the current time. Manual date/time edits stop following; the checkbox can resume it.
+
+Release builds retain the static `/MT` runtime and use size optimization, whole-program optimization and unused-code elimination. No additional Visual C++ runtime installation is required.
 
 ## Build
 

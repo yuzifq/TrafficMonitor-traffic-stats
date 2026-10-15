@@ -11,7 +11,6 @@
 #include <limits>
 #include <map>
 #include <set>
-#include <sstream>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -198,12 +197,25 @@ bool TryReadDailyHistoryLine(
     return !bucket_key.empty() && !app_name.empty();
 }
 
-bool ReadTabField(std::wistringstream& stream, std::wstring& value)
+class TabReader
 {
-    return static_cast<bool>(std::getline(stream, value, L'\t'));
-}
+public:
+    explicit TabReader(std::wstring_view text) : m_text(text) {}
+    bool Read(std::wstring& value)
+    {
+        if (m_text.empty()) return false;
+        const auto end = m_text.find(L'\t');
+        value.assign(m_text.substr(0, end));
+        m_text.remove_prefix(end == std::wstring_view::npos ? m_text.size() : end + 1);
+        return true;
+    }
+private:
+    std::wstring_view m_text;
+};
 
-bool ReadStoredAmount(std::wistringstream& stream, CHistoryTrafficStore::TrafficAmount& amount)
+bool ReadTabField(TabReader& stream, std::wstring& value) { return stream.Read(value); }
+
+bool ReadStoredAmount(TabReader& stream, CHistoryTrafficStore::TrafficAmount& amount)
 {
     std::wstring rx_text;
     std::wstring tx_text;
@@ -216,7 +228,7 @@ bool ReadStoredAmount(std::wistringstream& stream, CHistoryTrafficStore::Traffic
         TryParseStoredAppId(tx_text, amount.txBytes);
 }
 
-bool ReadDecimalAmount(std::wistringstream& stream, CHistoryTrafficStore::TrafficAmount& amount)
+bool ReadDecimalAmount(TabReader& stream, CHistoryTrafficStore::TrafficAmount& amount)
 {
     std::wstring rx_text;
     std::wstring tx_text;
@@ -227,36 +239,17 @@ bool ReadDecimalAmount(std::wistringstream& stream, CHistoryTrafficStore::Traffi
     return TryParseUInt64(rx_text, amount.rxBytes) && TryParseUInt64(tx_text, amount.txBytes);
 }
 
-void WriteStateLine(std::wofstream& output, const wchar_t* key, const std::wstring& value)
-{
-    output << key << L'\t' << value << L'\n';
-}
-
-void WriteStateLine(std::wofstream& output, const wchar_t* key, int value)
-{
-    output << key << L'\t' << value << L'\n';
-}
-
-void WriteAllTimeEntry(std::wofstream& output, const CHistoryTrafficStore::TrafficAmount& amount)
-{
-    output << L"all_time\t" << amount.rxBytes << L'\t' << amount.txBytes << L'\n';
-}
-
-void WritePathEntry(std::wofstream& output, const std::wstring& app_name, const std::wstring& exe_path)
-{
-    output << L"path\t" << app_name << L'\t' << exe_path << L'\n';
-}
+bool ReadUtf8Line(std::ifstream& input, std::wstring& line);
+void WriteUtf8Line(std::ofstream& output, const std::wstring& line);
 
 bool WriteDailyHistoryEntry(
-    std::wofstream& output,
+    std::ofstream& output,
     const std::wstring& time_key,
     std::uint64_t app_id,
     const CHistoryTrafficStore::TrafficAmount& amount)
 {
-    output << time_key << L'\t'
-           << FormatStoredAppId(app_id) << L'\t'
-           << FormatStoredAppId(amount.rxBytes) << L'\t'
-           << FormatStoredAppId(amount.txBytes) << L'\n';
+    WriteUtf8Line(output, time_key + L'\t' + FormatStoredAppId(app_id) + L'\t' +
+        FormatStoredAppId(amount.rxBytes) + L'\t' + FormatStoredAppId(amount.txBytes));
     return static_cast<bool>(output);
 }
 
@@ -289,9 +282,9 @@ bool DailyHistoryEndsWithBlock(
     std::unordered_map<std::wstring, CHistoryTrafficStore::TrafficAmount> last_matching_block;
     std::unordered_map<std::wstring, CHistoryTrafficStore::TrafficAmount> current_block;
     std::wstring current_time;
-    std::wifstream input(path);
+    std::ifstream input(path, std::ios::binary);
     std::wstring line;
-    while (std::getline(input, line))
+    while (ReadUtf8Line(input, line))
     {
         const auto first_tab = line.find(L'\t');
         const auto second_tab = first_tab == std::wstring::npos ? std::wstring::npos : line.find(L'\t', first_tab + 1);
@@ -794,10 +787,10 @@ bool TryReadSummaryFile(
     std::wstring line;
     while (ReadUtf8Line(input, line))
     {
-        std::wistringstream stream(line);
+        TabReader stream(line);
         std::vector<std::wstring> fields;
         std::wstring field;
-        while (std::getline(stream, field, L'\t'))
+        while (ReadTabField(stream, field))
         {
             fields.push_back(field);
         }
@@ -842,10 +835,9 @@ bool TryReadSummaryFile(
         {
             std::uint64_t id = 0;
             CHistoryTrafficStore::TrafficAmount amount{};
-            std::wistringstream amount_stream(fields[2] + L"\t" + fields[3]);
             if (!TryParseStoredAppId(fields[1], id) ||
                 (has_previous_id && id <= previous_id) ||
-                !ReadStoredAmount(amount_stream, amount))
+                !TryParseStoredAppId(fields[2], amount.rxBytes) || !TryParseStoredAppId(fields[3], amount.txBytes))
             {
                 return false;
             }
@@ -856,8 +848,7 @@ bool TryReadSummaryFile(
         }
         else if (fields.size() == 3 && fields[0] == L"total")
         {
-            std::wistringstream total_stream(fields[1] + L"\t" + fields[2]);
-            if (!ReadStoredAmount(total_stream, summary.total))
+            if (!TryParseStoredAppId(fields[1], summary.total.rxBytes) || !TryParseStoredAppId(fields[2], summary.total.txBytes))
             {
                 return false;
             }
@@ -1336,6 +1327,12 @@ void CHistoryTrafficStore::Initialize(const std::wstring& base_dir)
     m_allTimeRecoveryFormat = 0;
     m_hasPersistedAllTime = false;
     InvalidateCaches();
+}
+
+std::wstring CHistoryTrafficStore::GetStorageDirectory() const
+{
+    const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
+    return m_baseDir;
 }
 
 void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
@@ -2613,55 +2610,6 @@ void CHistoryTrafficStore::LoadHistoryFile(const std::wstring& path, TrafficAmou
     }
 }
 
-void CHistoryTrafficStore::LoadHistoryDirectory(const std::wstring& directory, TrafficAmount& loaded_total)
-{
-    if (directory.empty() || !std::filesystem::exists(directory))
-    {
-        return;
-    }
-
-    for (const auto& file_entry : std::filesystem::directory_iterator(std::filesystem::path(directory)))
-    {
-        if (!file_entry.is_regular_file())
-        {
-            continue;
-        }
-
-        const auto path = file_entry.path();
-        const auto date_key = path.stem().wstring();
-        if (path.extension() != L".tsv" || date_key.size() != 10)
-        {
-            continue;
-        }
-
-        SYSTEMTIME day_start{};
-        SYSTEMTIME day_end{};
-        if (!TryParseBucketKey(date_key, day_start, day_end))
-        {
-            continue;
-        }
-
-        std::wifstream input{ path };
-        std::wstring line;
-        std::wstring current_time_key;
-        while (std::getline(input, line))
-        {
-            std::wstring bucket_key;
-            std::wstring app_name;
-            TrafficAmount amount{};
-            if (!TryReadDailyHistoryLine(date_key, line, m_appNameById, current_time_key, bucket_key, app_name, amount) ||
-                !EnsureBucketTimeRange(bucket_key))
-            {
-                continue;
-            }
-
-            auto& entry = m_bucketByApp[bucket_key][app_name];
-            AddAmount(entry, amount);
-            AddAmount(loaded_total, amount);
-        }
-    }
-}
-
 bool CHistoryTrafficStore::AddMinuteFileTotals(
     const std::wstring& path,
     const DateTimeRange& range,
@@ -2714,61 +2662,6 @@ bool CHistoryTrafficStore::AddMinuteFileTotals(
     return input.eof();
 }
 
-void CHistoryTrafficStore::AddRangeHistoryFromDirectory(
-    const std::wstring& directory,
-    const DateTimeRange& range,
-    std::unordered_map<std::wstring, TrafficAmount>& totals_by_app) const
-{
-    const auto range_start = ToFileTimeValue(range.start);
-    if (directory.empty() ||
-        !std::filesystem::exists(directory))
-    {
-        return;
-    }
-
-    const auto range_end = ToFileTimeValue(range.end);
-    for (const auto& file_entry : std::filesystem::directory_iterator(std::filesystem::path(directory)))
-    {
-        if (!file_entry.is_regular_file())
-        {
-            continue;
-        }
-        const auto path = file_entry.path();
-        const auto month_key = path.stem().wstring();
-        if (path.extension() != L".tmh" || month_key.size() != 7)
-        {
-            continue;
-        }
-
-        unsigned short year = 0;
-        unsigned short month = 0;
-        if (swscanf_s(month_key.c_str(), L"%hu-%hu", &year, &month) != 2 || month < 1 || month > 12)
-        {
-            continue;
-        }
-        SYSTEMTIME month_start{};
-        month_start.wYear = year;
-        month_start.wMonth = month;
-        month_start.wDay = 1;
-        SYSTEMTIME month_end = month_start;
-        month_end.wMonth = month == 12 ? 1 : static_cast<WORD>(month + 1);
-        month_end.wYear = month == 12 ? static_cast<WORD>(year + 1) : year;
-        const auto next_month_value = ToFileTimeValue(month_end);
-        const auto month_end_value = next_month_value >= 600000000ULL ? next_month_value - 600000000ULL : 0;
-        bool archive_valid = true;
-        if (month_end_value >= range_start && ToFileTimeValue(month_start) <= range_end)
-        {
-            archive_valid = AddTmhRangeTotals(path, range.start, range.end, totals_by_app);
-        }
-        else
-        {
-            TmhMetadata metadata{};
-            archive_valid = TryReadTmhMetadata(path, metadata);
-        }
-        static_cast<void>(archive_valid);
-    }
-}
-
 bool CHistoryTrafficStore::AppendHistoryEntries(
     const std::wstring& bucket_key,
     const std::vector<std::pair<std::wstring, TrafficAmount>>& entries)
@@ -2792,7 +2685,7 @@ bool CHistoryTrafficStore::AppendHistoryEntries(
     }
     const auto file_path = DailyHistoryPath(m_historyDir, date);
     std::filesystem::create_directories(file_path.parent_path());
-    std::wofstream output{ file_path, std::ios::app };
+    std::ofstream output{ file_path, std::ios::binary | std::ios::app };
     if (!output.is_open())
     {
         return false;
@@ -2831,7 +2724,7 @@ void CHistoryTrafficStore::LoadCheckpoint()
     std::wstring line;
     while (ReadUtf8Line(input, line))
     {
-        std::wistringstream stream(line);
+        TabReader stream(line);
         std::wstring type;
         if (!ReadTabField(stream, type))
         {
@@ -3066,9 +2959,9 @@ void CHistoryTrafficStore::LoadState()
     std::wstring line;
     while (ReadUtf8Line(input, line))
     {
-        std::wistringstream stream(line);
+        TabReader stream(line);
         std::wstring type;
-        if (!std::getline(stream, type, L'\t'))
+        if (!ReadTabField(stream, type))
         {
             continue;
         }

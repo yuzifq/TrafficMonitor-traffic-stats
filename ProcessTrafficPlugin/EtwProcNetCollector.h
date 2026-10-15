@@ -33,13 +33,14 @@ public:
     bool Start();
     void Stop();
 
+    // Only the host data callback advances samples; detail windows read them without consuming traffic.
+    void SampleTraffic();
     std::unordered_map<DWORD, ProcessTrafficSnapshot> GetProcessTrafficSnapshot() const;
     std::wstring GetStatusText() const;
 
 private:
     bool StartTraceSession();
     void StopTraceSession();
-    void RefreshRates() const;
     void WorkerLoop();
     void HandleEventRecord(_EVENT_RECORD* event_record);
     void UpdateStatus(std::wstring status_text);

@@ -45,6 +45,8 @@ private:
     void ToggleRefreshPaused();
     void ExportSelectedRange();
     void ApplyLanguageTexts();
+    void RefreshAdapterChoices();
+    void UpdateFollowRange();
     void ApplyQuickRange(int button_id);
     void ApplyCurrentRangeToControls();
     void ShowTotalViewControls(bool show);
@@ -114,6 +116,12 @@ private:
     HWND m_monthRangeButton;
     HWND m_yearRangeButton;
     HWND m_summary;
+    HWND m_adapterLabel{};
+    HWND m_adapterCombo{};
+    HWND m_followRangeCheck{};
+    std::vector<std::wstring> m_adapterIds;
+    std::vector<std::wstring> m_adapterLabels;
+    int m_followQuickRangeId{};
     HIMAGELIST m_smallImageList;
     ViewMode m_viewMode;
     ViewMode m_lastBuiltView;

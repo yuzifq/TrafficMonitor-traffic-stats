@@ -8,6 +8,7 @@
 
 #include "EtwProcNetCollector.h"
 #include "HistoryTrafficStore.h"
+#include "NetworkTrafficStore.h"
 #include "PluginInterface.h"
 #include "ProcessFinder.h"
 #include "ProcNetItem.h"
@@ -46,16 +47,18 @@ public:
     int GetCommandCount() override;
     const wchar_t* GetCommandName(int command_index) override;
     void OnPluginCommand(int command_index, void* hWnd, void* para) override;
-    void OnInitialize(ITrafficMonitor* pApp) override;
     void OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data) override;
 
     std::vector<AppTrafficEntry> BuildAllApps() const;
     std::vector<AppTrafficEntry> BuildHistoryApps(const CHistoryTrafficStore::DateTimeRange& range) const;
     std::wstring BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range, CHistoryTrafficStore::DisplayLanguage language) const;
+    std::wstring BuildLiveNetworkText(CHistoryTrafficStore::DisplayLanguage language) const;
+    CNetworkTrafficCollector::Snapshot GetNetworkSnapshot() const;
+    bool SetNetworkAdapter(const std::wstring& id);
     bool ExportHistory(
         const CHistoryTrafficStore::DateTimeRange& range,
         const std::wstring& output_path,
-        std::wstring& error_message) const;
+        std::wstring& error_message, bool network = false) const;
     CHistoryTrafficStore::DateTimeRange GetPreferredRange() const;
     void SetPreferredRange(const CHistoryTrafficStore::DateTimeRange& range);
     CHistoryTrafficStore::DisplayLanguage GetPreferredLanguage() const;
@@ -87,7 +90,9 @@ private:
     std::vector<CProcNetItem> m_items;
     CEtwProcNetCollector m_collector;
     CHistoryTrafficStore m_historyStore;
-    ITrafficMonitor* m_app;
+    CNetworkTrafficCollector m_networkCollector;
+    CNetworkTrafficStore m_networkStore;
+    mutable std::mutex m_historyMutex;
     std::wstring m_tooltip;
     std::wstring m_configDir;
     bool m_collectorStarted;

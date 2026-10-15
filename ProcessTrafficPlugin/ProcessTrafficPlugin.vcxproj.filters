@@ -13,6 +13,8 @@
   <ItemGroup>
     <ClInclude Include="EtwProcNetCollector.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="HistoryTrafficStore.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="NetworkTrafficCollector.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="NetworkTrafficStore.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="PluginInterface.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="ProcNetItem.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="ProcNetPlugin.h"><Filter>Header Files</Filter></ClInclude>
@@ -23,6 +25,8 @@
   <ItemGroup>
     <ClCompile Include="EtwProcNetCollector.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="HistoryTrafficStore.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="NetworkTrafficCollector.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="NetworkTrafficStore.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="PluginMain.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="ProcNetItem.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="ProcNetPlugin.cpp"><Filter>Source Files</Filter></ClCompile>

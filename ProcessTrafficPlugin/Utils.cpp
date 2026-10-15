@@ -59,13 +59,6 @@ std::wstring Utils::FormatBytes(std::uint64_t bytes)
 }
 
 
-std::wstring Utils::JoinPids(const std::wstring& exe_name, const std::size_t pid_count)
-{
-    wchar_t buffer[128]{};
-    swprintf_s(buffer, L"Target: %ls (%zu instance%ls)", exe_name.c_str(), pid_count, pid_count == 1 ? L"" : L"s");
-    return buffer;
-}
-
 std::wstring Utils::ShortLabel(const std::wstring& exe_name, bool is_download)
 {
     std::wstring label = TrimExe(exe_name);

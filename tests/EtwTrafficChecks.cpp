@@ -115,15 +115,21 @@ void CheckExactBytes()
             Check(traffic.txTotalBytes == 1200 && traffic.rxTotalBytes == 777, "Network byte count or direction changed");
             for (int i = 0; i < 100; ++i) collector.HandleEventRecord(&send.record);
             Check(traffic.txTotalBytes == 121200, "Repeated packets were multiplied or incorrectly deduplicated");
-            collector.RefreshRates();
+            collector.m_lastSampleTick = GetTickCount64() - 1000;
+            collector.SampleTraffic();
+            const auto first = collector.GetProcessTrafficSnapshot().at(testPid);
+            Check(first.txSampleBytes == 121200 && first.rxSampleBytes == 777,
+                "The first sample discarded traffic received during startup");
             collector.HandleEventRecord(&send.record);
             collector.m_lastSampleTick = GetTickCount64() - 1000;
+            collector.SampleTraffic();
             const auto sample = collector.GetProcessTrafficSnapshot().at(testPid);
             Check(sample.txSampleBytes == 1200 && sample.rxSampleBytes == 0, "Sampling re-added cumulative totals");
             const auto again = collector.GetProcessTrafficSnapshot().at(testPid);
             Check(again.txTotalBytes == sample.txTotalBytes && again.sampleSequence == sample.sampleSequence,
                 "Reading a snapshot counted the same sample again");
             collector.m_lastSampleTick = GetTickCount64() - 1000;
+            collector.SampleTraffic();
             const auto idle = collector.GetProcessTrafficSnapshot().at(testPid);
             Check(idle.txSampleBytes == 0 && idle.rxSampleBytes == 0, "Idle sampling repeated the last increment");
         }
@@ -185,6 +191,37 @@ void CheckProxyForwarding()
     std::cout << "PASS: proxy download is not an upload, non-loopback mapped IPv6 and version 1 preserved" << std::endl;
 }
 
+void CheckDisplayReadsPreserveSamples()
+{
+    CEtwProcNetCollector collector;
+    collector.SampleTraffic();
+    NetworkEvent receive(tcpProvider, 11, 4096, false);
+    NetworkEvent send(udpProvider, 10, 1024, false);
+    collector.HandleEventRecord(&receive.record);
+    collector.HandleEventRecord(&send.record);
+    const auto sequenceBeforeDisplay = collector.m_sampleSequence;
+    collector.m_lastSampleTick = GetTickCount64() - 1000;
+    const auto display = collector.GetProcessTrafficSnapshot().at(testPid);
+    Check(collector.m_sampleSequence == sequenceBeforeDisplay,
+        "A display read advanced sampling before history could consume it");
+    Check(display.rxTotalBytes == 4096 && display.txTotalBytes == 1024, "Display totals lost incoming traffic");
+    collector.HandleEventRecord(&receive.record);
+    collector.GetProcessTrafficSnapshot();
+    collector.SampleTraffic();
+    const auto history = collector.GetProcessTrafficSnapshot().at(testPid);
+    Check(history.rxSampleBytes == 8192 && history.txSampleBytes == 1024,
+        "Traffic observed by the display was missing from the history sample");
+    const auto sequenceBeforeIdleDisplay = collector.m_sampleSequence;
+    collector.m_lastSampleTick = GetTickCount64() - 1000;
+    collector.GetProcessTrafficSnapshot();
+    Check(collector.m_sampleSequence == sequenceBeforeIdleDisplay,
+        "An idle display read erased the history sample");
+    collector.SampleTraffic();
+    const auto idle = collector.GetProcessTrafficSnapshot().at(testPid);
+    Check(idle.rxSampleBytes == 0 && idle.txSampleBytes == 0, "The next history sample repeated old traffic");
+    std::cout << "PASS: display reads preserve pending traffic, delayed history sample, no repeated increments" << std::endl;
+}
+
 void CheckIgnoredEvents()
 {
     CEtwProcNetCollector collector;
@@ -228,6 +265,7 @@ int main()
         CheckExactBytes();
         CheckLoopback();
         CheckProxyForwarding();
+        CheckDisplayReadsPreserveSamples();
         CheckIgnoredEvents();
         return 0;
     }
