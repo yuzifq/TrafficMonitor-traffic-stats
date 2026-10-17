@@ -44,10 +44,6 @@ If you do not want to build the plugin yourself, you can download the prebuilt p
 
 ## Adapter Statistics And Minute History
 
-Adapter totals use the same cumulative-counter delta approach as TrafficMonitor. The plugin independently reads Windows 64-bit byte counters through `GetIfTable2`; it does not read the host's live totals or `history_traffic.dat`. Select the same adapter in both applications and compare increments over the same interval. Automatic selection prefers connected hardware adapters and keeps its choice stable. Virtual adapters can be selected manually.
-
-Adapter history is stored alongside process history in `network_traffic_history/YYYY/MM/YYYY-MM-DD.tsv`. Completed intervals are appended; the current interval is checkpointed every 10 seconds. Commit IDs prevent duplicate counting during recovery. Daily `.sum` files are rebuildable summary caches. An abnormal termination can lose data collected since the last checkpoint.
-
 - Consecutive short samples within a minute are merged. Samples crossing a minute boundary and long intervals retain their actual endpoints; bytes are never distributed proportionally.
 - Network range totals include only records fully contained in the selected range. Boundary bytes are shown separately and excluded from those totals.
 - Sample coverage distinguishes missing observations from measured zero traffic. Long sampling intervals are flagged.
@@ -56,11 +52,7 @@ Adapter history is stored alongside process history in `network_traffic_history/
 - Adapter history starts when this feature is enabled. Existing process history is retained and is not backfilled into adapter totals. ETW process totals can still differ from adapter counters.
 - Day, week, month and year shortcuts follow the current time. Manual date/time edits stop following; the checkbox can resume it.
 
-Release builds retain the static `/MT` runtime and use size optimization, whole-program optimization and unused-code elimination. No additional Visual C++ runtime installation is required.
-
 ## V2 Connection-Level Hybrid Collection
-
-Process accounting uses ETW and switches qualified TCP connections to EStats only at verified boundaries. Sources are never added for the same interval, scaled to adapter totals, or selected merely because one is larger. UDP, short flows and existing connections without sufficient boundary evidence remain on ETW.
 
 - Native IPv4/IPv6 EStats enables only `TcpConnectionEstatsData`. No extra driver, service or runtime is required. ETW continues when EStats cannot be enabled.
 - Connection tables are checked every 500 ms, with counter reads targeting one second, independently of UI refresh. Initial observations, counter rollback and recovery after failed sampling establish new baselines rather than backfilling unknown intervals.
@@ -74,12 +66,6 @@ Process accounting uses ETW and switches qualified TCP connections to EStats onl
 - New checkpoints and append transactions carry unique commit IDs and checksums. Legitimate identical traffic in one minute is not mistaken for a replay; conflicting recovery preserves existing files and reports an error.
 - Diagnostics reports ETW loss/parsing failures, EStats enable/read failures, actual source switches, fallbacks, incomplete intervals, unknown bytes and history write health. Zero-byte uncertainty markers are persisted too. Pausing refresh affects the UI only.
 - Release x64 emits a linker map and fails if the DLL reaches **600,000 bytes**. API 7 has no unload callback, so collection pins the module; exit TrafficMonitor to fully unload it.
-
-Counter semantics matter: [EStats `DataBytesIn/Out`](https://learn.microsoft.com/en-us/windows/win32/api/tcpestats/ns-tcpestats-tcp_estats_data_rod_v0) includes retransmitted data and excludes TCP headers; adapter counters also include protocol/control traffic. Process totals are not promised to equal adapter totals. Real IPv4/IPv6 tests verify nonzero-prefix handoff, omitted legacy-event recovery and failure fallback; see `V2_IMPLEMENTATION.md` for evidence and limitations.
-
-API 7 has no exit callback. The plugin never joins workers under the DLL loader lock. Normal Stop removes owned proof sessions; after abrupt process exit, the next start removes abandoned sessions only after validating their GUID, PID and process birth, preserving live sessions.
-
-Controlled TCP, external comparison and load-test tools are under `tests/` and are not DLL runtime dependencies. Their reports do not establish correctness for every proxy, VPN or Windows networking configuration.
 
 ## Build
 
@@ -106,6 +92,6 @@ msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
 <img width="710" height="462" alt="image" src="https://github.com/user-attachments/assets/e9ece008-b293-482a-adcd-f8b49aafc6fc" />
 
 
-<img width="1029" height="644" alt="image" src="https://github.com/user-attachments/assets/56a89174-2dec-43aa-9b30-567efd8f05aa" />
+<img width="884" height="730" alt="image" src="https://github.com/user-attachments/assets/7f1a96af-bdb4-4a35-a988-9f3710ef8928" />
 
-<img width="1116" height="731" alt="image" src="https://github.com/user-attachments/assets/897f1580-47d6-4dfa-a8ca-a6aef7de9399" />
+<img width="884" height="730" alt="image" src="https://github.com/user-attachments/assets/486f07bc-de66-4087-8a69-532eb8838ccf" />
