@@ -38,6 +38,8 @@ public:
         CTcpProofCollector::Diagnostics proof;
         CTcpSourceTracker::Diagnostics sources;
         Traffic::U64 unknownRx{}, unknownTx{}, queueOverflows{}, publications{}, commitFailures{};
+        Traffic::U64 rawRx{}, rawTx{}, formalRx{}, formalTx{}, etwFormalRx{}, etwFormalTx{};
+        Traffic::U64 captureUncertainIntervals{};
         std::uint32_t trackedConnections{}, probing{}, active{}, uncertain{};
         bool running{};
     };
@@ -73,6 +75,8 @@ private:
     void ProcessRaw(std::map<Traffic::ConnectionKey, Raw>& raw, Traffic::U64 now);
     void Publish(Traffic::U64 now);
     void Accumulate(const Delta& delta);
+    void RecordUnknown(Traffic::U64 start, Traffic::U64 end, Traffic::Confidence confidence);
+    void RecordCaptureHealth(const CEtwProcNetCollector::Diagnostics& diagnostics, Traffic::U64 now, bool running);
     void DrainSources();
     static std::wstring Identity(const Traffic::ProcessIdentity& owner, Traffic::U64 generation);
 
@@ -97,4 +101,5 @@ private:
     CommitSink m_commitSink{};
     void* m_commitContext{};
     bool m_includeProofLoopback{};
+    bool m_captureIncomplete{};
 };

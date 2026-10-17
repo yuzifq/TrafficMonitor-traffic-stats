@@ -8,6 +8,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -263,6 +264,211 @@ void CaptureWindow(HWND hwnd, const std::filesystem::path& path)
     ReleaseDC(nullptr, screen);
 }
 
+void CheckSummaryBorder(CTrafficDetailWindow& view)
+{
+    RECT area{};
+    GetClientRect(view.m_summary, &area);
+    const auto dc = GetDC(view.m_summary);
+    const auto memory = CreateCompatibleDC(dc);
+    const auto bitmap = CreateCompatibleBitmap(dc, area.right, area.bottom);
+    Check(memory && bitmap, "Cannot create summary border test surface");
+    const auto old_bitmap = SelectObject(memory, bitmap);
+    DRAWITEMSTRUCT item{};
+    item.hDC = memory;
+    item.rcItem = area;
+    view.HandleMessage(view.m_hwnd, WM_DRAWITEM, kSummaryId, reinterpret_cast<LPARAM>(&item));
+    bool valid = true;
+    const auto border = GetSysColor(COLOR_3DSHADOW);
+    const auto background = GetSysColor(COLOR_WINDOW);
+    for (int x = 0; x < area.right; ++x)
+    {
+        valid &= GetPixel(memory, x, 0) == border && GetPixel(memory, x, area.bottom - 1) == border;
+        if (x > 0 && x < area.right - 1)
+            valid &= GetPixel(memory, x, 1) == background && GetPixel(memory, x, area.bottom - 2) == background;
+    }
+    for (int y = 1; y < area.bottom - 1; ++y)
+    {
+        valid &= GetPixel(memory, 0, y) == border && GetPixel(memory, area.right - 1, y) == border &&
+            GetPixel(memory, 1, y) == background && GetPixel(memory, area.right - 2, y) == background;
+    }
+    SelectObject(memory, old_bitmap);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(view.m_summary, dc);
+    Check(valid, "Summary border is not a flat, one-pixel system control outline");
+}
+
+void CheckCompactSummary(CTrafficDetailWindow& view)
+{
+    HDC dc = GetDC(view.m_summary);
+    const auto old_font = SelectObject(dc, view.m_font);
+    const auto language = view.GetSelectedLanguage();
+    RECT area{};
+    GetClientRect(view.m_summary, &area);
+    const auto layout = SummaryLayout(area, dc, view.m_lineHeight, language);
+    Check((GetWindowLongW(view.m_summary, GWL_EXSTYLE) & (WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_DLGMODALFRAME)) == 0 &&
+        (GetWindowLongW(view.m_summary, GWL_STYLE) & WS_BORDER) == 0,
+        "The summary still has a native inset or thick border");
+    Check(area.bottom < (std::max)(216, view.m_lineHeight * 10 + 56),
+        "The summary did not return vertical space to the list");
+    RECT list{}, summary{};
+    GetWindowRect(view.m_list, &list); GetWindowRect(view.m_summary, &summary);
+    Check(list.bottom + kSummaryGap == summary.top, "The list/summary separation changed unexpectedly");
+    const int values_left = layout.left + layout.labelWidth, values_width = layout.right - values_left;
+    RECT value_cell{ values_left + 2, layout.top + layout.rowHeight * 2,
+        values_left + values_width / 4 - 2, layout.top + layout.rowHeight * 2 + layout.dataHeight };
+    RECT short_value = value_cell;
+    DrawTextW(dc, L"1024.00 MB", -1, &short_value, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    if (short_value.right <= value_cell.right)
+        Check(layout.dataHeight <= view.m_lineHeight * 2 + 4, "Single-line values reserve excessive blank space");
+    for (const auto value : { 1048575ULL, 1073741823ULL, 1099511627775ULL, 1ULL << 50, UINT64_MAX })
+    {
+        const auto text = Utils::FormatBytes(value);
+        auto measured = value_cell;
+        DrawTextW(dc, text.c_str(), -1, &measured, DT_CALCRECT | DT_WORDBREAK | DT_CENTER | DT_NOPREFIX);
+        Check(measured.right <= value_cell.right && measured.bottom <= value_cell.bottom,
+            "A formatted byte value does not fit a table cell");
+    }
+    const auto total = [](const CHistoryTrafficStore::TrafficAmount& amount) { return Utils::FormatBytes(amount.rxBytes + amount.txBytes); };
+    const std::wstring texts[] = {
+        GetLocalizedText(language, { L"Process range total: ", L"\u8fdb\u7a0b\u533a\u95f4\u603b\u91cf: " }) + total(view.m_totals.processRange),
+        GetLocalizedText(language, { L"All-time total: ", L"\u7d2f\u8ba1\u603b\u91cf: " }) + total(view.m_totals.processAll),
+        GetLocalizedText(language, { L"Network range total: ", L"\u7f51\u5361\u533a\u95f4\u603b\u91cf: " }) + total(view.m_totals.networkRange),
+        GetLocalizedText(language, { L"All-time total: ", L"\u7d2f\u8ba1\u603b\u91cf: " }) + total(view.m_totals.networkAll)
+    };
+    for (int i = 0; i < 4; ++i)
+    {
+        const int half = (layout.right - layout.left) / 2;
+        const int top = layout.top + layout.rowHeight * 2 + layout.dataHeight * (2 + i / 2) + kTotalsGap;
+        const RECT cell{ layout.left + (i % 2) * half, top, layout.left + (i % 2 + 1) * half - 4,
+            top + layout.dataHeight };
+        auto measured = cell;
+        DrawTextW(dc, texts[i].c_str(), -1, &measured, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        Check(measured.bottom <= cell.bottom && cell.bottom <= area.bottom,
+            "A compact total wraps beyond its available height");
+    }
+    SelectObject(dc, old_font);
+    ReleaseDC(view.m_summary, dc);
+    CheckSummaryBorder(view);
+}
+
+std::wstring SummaryContents(HWND hwnd)
+{
+    GETTEXTLENGTHEX length{ GTL_PRECISE | GTL_NUMCHARS, 1200 };
+    std::wstring text(static_cast<size_t>(SendMessageW(hwnd, EM_GETTEXTLENGTHEX,
+        reinterpret_cast<WPARAM>(&length), 0)) + 1, L'\0');
+    GETTEXTEX read{};
+    read.cb = static_cast<DWORD>(text.size() * sizeof(wchar_t)); read.flags = GT_RAWTEXT; read.codepage = 1200;
+    text.resize(static_cast<size_t>(SendMessageW(hwnd, EM_GETTEXTEX, reinterpret_cast<WPARAM>(&read),
+        reinterpret_cast<LPARAM>(text.data()))));
+    return text;
+}
+
+void CheckSelectableSummary(CTrafficDetailWindow& view)
+{
+    const auto hwnd = view.m_summaryContent;
+    Check(hwnd && (GetWindowLongW(hwnd, GWL_STYLE) & ES_READONLY), "Summary text is not a native read-only control");
+    const auto text = SummaryContents(hwnd);
+    const auto language = view.GetSelectedLanguage();
+    const auto network = text.find(GetLocalizedText(language, { L"Network", L"网卡" }));
+    const auto process = text.find(GetLocalizedText(language, { L"Process", L"进程" }));
+    const auto process_total = text.find(GetLocalizedText(language, { L"Process range total:", L"进程区间总量:" }));
+    const auto network_total = text.find(GetLocalizedText(language, { L"Network range total:", L"网卡区间总量:" }));
+    Check(network < process && process < process_total && process_total < network_total && network_total < text.size(),
+        "Selectable summary lost text or reordered the footer incorrectly");
+    const auto position = [&](size_t at) {
+        POINT point{};
+        SendMessageW(hwnd, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&point), static_cast<LPARAM>(at));
+        return point;
+    };
+    const auto network_point = position(network), process_point = position(process);
+    const auto process_total_point = position(process_total), network_total_point = position(network_total);
+    Check(std::abs((network_total_point.y - process_total_point.y) - (process_point.y - network_point.y)) <= 1,
+        "Native footer line spacing differs from the network/process rows");
+    RECT area{};
+    GetClientRect(hwnd, &area);
+    if (network_total_point.y < 0 || network_total_point.y + view.m_lineHeight > area.bottom)
+    {
+        CaptureWindow(view.m_hwnd, L"build/summary-copy-debug.bmp");
+        std::wcerr << L"summary height=" << area.bottom << L" footer=" << network_total_point.y
+            << L" line=" << view.m_lineHeight << L" network=" << network_point.y << L" process=" << process_point.y
+            << L" processTotal=" << process_total_point.y << L" text=" << text << std::endl;
+    }
+    Check(network_total_point.y >= 0 && network_total_point.y + view.m_lineHeight <= area.bottom,
+        "Native summary footer is clipped below the panel");
+    const auto end = process_total + 8;
+    SendMessageW(hwnd, EM_SETSEL, process_total, static_cast<LPARAM>(end));
+    wchar_t selected[32]{};
+    Check(SendMessageW(hwnd, EM_GETSELTEXT, 0, reinterpret_cast<LPARAM>(selected)) == 8 &&
+        std::wstring(selected) == text.substr(process_total, 8), "Selected summary text cannot be read/copied exactly");
+    const auto totals = view.m_totals;
+    view.m_totals.networkRange.rxBytes += 1024;
+    view.UpdateSummaryContent();
+    Check(SummaryContents(hwnd) == text, "A live update replaced text during selection");
+    SendMessageW(hwnd, WM_CHAR, L'x', 0);
+    Check(SummaryContents(hwnd) == text, "The read-only summary accepted edits");
+    SendMessageW(hwnd, WM_KILLFOCUS, 0, 0);
+    view.UpdateSummaryContent();
+    Check(SummaryContents(hwnd) != text, "Summary did not resume updating after selection lost focus");
+    view.m_totals = totals;
+    view.UpdateSummaryContent();
+}
+
+HWND detailsParent{};
+std::exception_ptr detailsError;
+bool detailsInspected{};
+bool detailsDiagnostic{};
+ULONGLONG detailsDeadline{};
+std::wstring detailsExpected;
+
+void CALLBACK InspectDetails(HWND, UINT, UINT_PTR timer, DWORD)
+{
+    const auto dialog = GetLastActivePopup(detailsParent);
+    if (dialog == detailsParent) return;
+    const auto edit = GetDlgItem(dialog, kDetailsTextId);
+    if (!edit && GetTickCount64() < detailsDeadline) return;
+    KillTimer(nullptr, timer);
+    try
+    {
+        Check(edit && (GetWindowLongW(edit, GWL_STYLE) & ES_READONLY) &&
+            (GetWindowLongW(edit, GWL_STYLE) & WS_VSCROLL), "Details is not a scrollable read-only view");
+        std::wstring text(GetWindowTextLengthW(edit) + 1, L'\0');
+        GetWindowTextW(edit, text.data(), static_cast<int>(text.size()));
+        text.resize(wcslen(text.c_str()));
+        Check(text == detailsExpected, "Details did not preserve every original summary field");
+        SetWindowPos(dialog, nullptr, 0, 0, 500, 320, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        RECT edit_rect{}, button_rect{}, area{};
+        GetWindowRect(edit, &edit_rect); GetWindowRect(GetDlgItem(dialog, IDOK), &button_rect);
+        GetClientRect(dialog, &area);
+        MapWindowPoints(nullptr, dialog, reinterpret_cast<POINT*>(&edit_rect), 2);
+        MapWindowPoints(nullptr, dialog, reinterpret_cast<POINT*>(&button_rect), 2);
+        Check(edit_rect.bottom < button_rect.top && button_rect.right <= area.right && button_rect.bottom <= area.bottom,
+            "Details controls overlap after resize");
+        CaptureWindow(dialog, std::filesystem::path(L"build") / (detailsDiagnostic ?
+            (detailsExpected.find(L"Ledger:") == std::wstring::npos ? L"traffic-diagnostics-zh.bmp" : L"traffic-diagnostics-en.bmp") :
+            (detailsExpected.find(L"Start:") == std::wstring::npos ? L"traffic-details-zh.bmp" : L"traffic-details-en.bmp")));
+        detailsInspected = true;
+    }
+    catch (...) { detailsError = std::current_exception(); }
+    PostMessageW(dialog, WM_COMMAND, IDOK, 0);
+}
+
+void CheckDetails(CTrafficDetailWindow& view, bool diagnostics = false)
+{
+    detailsParent = view.m_hwnd;
+    detailsDiagnostic = diagnostics;
+    detailsExpected = diagnostics ? view.m_plugin.BuildDiagnosticsText(view.GetSelectedLanguage()) : view.BuildDetailsText();
+    detailsDeadline = GetTickCount64() + 5000;
+    detailsError = nullptr;
+    detailsInspected = false;
+    const auto timer = SetTimer(nullptr, 0, 10, InspectDetails);
+    Check(timer != 0, "Cannot inspect modal details dialog");
+    view.HandleCommand(diagnostics ? kDiagnosticsId : kDetailsId, BN_CLICKED);
+    KillTimer(nullptr, timer);
+    if (detailsError) std::rethrow_exception(detailsError);
+    Check(detailsInspected && IsWindowEnabled(view.m_hwnd), "Details did not close and restore the parent window");
+}
+
 void CheckNetworkView(CProcNetPlugin& plugin, const std::filesystem::path& fixture)
 {
     plugin.m_networkStore.Initialize(fixture.wstring());
@@ -271,7 +477,13 @@ void CheckNetworkView(CProcNetPlugin& plugin, const std::filesystem::path& fixtu
         applications.push_back({ L"test-" + std::to_wstring(i) + L".exe", L"C:\\Windows\\System32\\notepad.exe",
             static_cast<std::uint64_t>(i + 1) * 8192, static_cast<std::uint64_t>(i + 1) * 1024 });
     plugin.m_historyStore.Update(applications);
+    // A historical baseline exercises TB display without inflating today's rows.
+    plugin.m_historyStore.GetAllTimeTotal();
+    plugin.m_historyStore.m_cachedAllTimeTotal = { 3ULL << 40, 2ULL << 40 };
+    plugin.m_historyStore.m_allTimeCacheValid = true;
     const auto now = CNetworkTrafficCollector::UtcNowMs();
+    Check(plugin.m_networkStore.Add({ now - 86401000, now - 86400000, 3ULL << 30, 2ULL << 30, L"A", false }),
+        "Cannot seed an older network cumulative baseline");
     CNetworkTrafficCollector::Adapter adapter{ L"A", L"Ethernet (test adapter)", 1, 100000, 200000, true, true };
     plugin.m_networkCollector.Observe({ adapter }, 1000, now - 1000);
     adapter.rxBytes += 8192; adapter.txBytes += 1024;
@@ -291,9 +503,9 @@ void CheckNetworkView(CProcNetPlugin& plugin, const std::filesystem::path& fixtu
         Check(summary.find(language == CHistoryTrafficStore::DisplayLanguage::English ? L"Network range" : L"\u7f51\u5361\u533a\u95f4") != std::wstring::npos &&
             summary.find(language == CHistoryTrafficStore::DisplayLanguage::English ? L"Process range" : L"\u8fdb\u7a0b\u533a\u95f4") != std::wstring::npos,
             "Network and process totals are not distinguished");
-        for (const int width : { 900, 1200 })
+        for (const auto size : { std::pair{ 900, 680 }, std::pair{ 900, 740 }, std::pair{ 1200, 740 } })
         {
-            SetWindowPos(hwnd, nullptr, 0, 0, width, 740, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            SetWindowPos(hwnd, nullptr, 0, 0, size.first, size.second, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             RECT client{};
             GetClientRect(hwnd, &client);
             RECT previous{};
@@ -307,20 +519,53 @@ void CheckNetworkView(CProcNetPlugin& plugin, const std::filesystem::path& fixtu
                 Check(previous.right <= bounds.left, "Summary/date/quick-range controls overlap");
                 previous = bounds;
             }
-            HDC dc = GetDC(view.m_summary);
-            HGDIOBJ font = SelectObject(dc, reinterpret_cast<HFONT>(SendMessageW(view.m_summary, WM_GETFONT, 0, 0)));
-            TEXTMETRICW metrics{};
-            GetTextMetricsW(dc, &metrics);
-            RECT area{};
-            SendMessageW(view.m_summary, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&area));
-            const auto lines = SendMessageW(view.m_summary, EM_GETLINECOUNT, 0, 0);
-            Check(lines * metrics.tmHeight <= area.bottom - area.top, "Summary text is clipped vertically");
-            SelectObject(dc, font);
-            ReleaseDC(view.m_summary, dc);
+            const auto details = view.BuildDetailsText();
+            Check(details.find(summary) != std::wstring::npos &&
+                details.find(language == CHistoryTrafficStore::DisplayLanguage::English ? L"Start:" : L"\u5f00\u59cb\u65f6\u95f4:") != std::wstring::npos,
+                "Details lost the original summary or selected time range");
+            Check(view.m_totals.networkRange.rxBytes == 8192 && view.m_totals.networkRange.txBytes == 1024 &&
+                view.m_totals.processRange.rxBytes == plugin.m_historyStore.GetRangeTotal(view.GetSelectedRange()).rxBytes,
+                "Compact cells differ from the original source totals");
+            RECT details_button{}, export_button{}, follow{}, quick{};
+            GetWindowRect(view.m_detailsButton, &details_button);
+            GetWindowRect(view.m_exportButton, &export_button);
+            GetWindowRect(view.m_followRangeCheck, &follow);
+            GetWindowRect(view.m_yearRangeButton, &quick);
+            Check(details_button.top == export_button.top && details_button.right < export_button.left &&
+                export_button.bottom > quick.bottom && details_button.top > follow.bottom,
+                "Details/export are not separated at the bottom of the controls");
+            CheckCompactSummary(view);
+            CheckSelectableSummary(view);
         }
         SetWindowPos(hwnd, nullptr, 0, 0, 900, 740, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         CaptureWindow(hwnd, std::filesystem::path(L"build") /
             (language == CHistoryTrafficStore::DisplayLanguage::English ? L"network-history-en.bmp" : L"network-history-zh.bmp"));
+        CheckDetails(view);
+        CheckDetails(view, true);
+
+        const auto original_font = view.m_font;
+        const auto original_height = view.m_lineHeight;
+        view.m_font = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        Check(view.m_font != nullptr, "Cannot create larger text test font");
+        HDC dc = GetDC(hwnd);
+        const auto previous = SelectObject(dc, view.m_font);
+        TEXTMETRICW metrics{};
+        GetTextMetricsW(dc, &metrics);
+        view.m_lineHeight = metrics.tmHeight;
+        SelectObject(dc, previous); ReleaseDC(hwnd, dc);
+        view.SetAllControlFonts();
+        view.ResizeChildren(884, 641);
+        CheckCompactSummary(view);
+        CheckSelectableSummary(view);
+        CaptureWindow(hwnd, std::filesystem::path(L"build") /
+            (language == CHistoryTrafficStore::DisplayLanguage::English ? L"network-history-large-en.bmp" : L"network-history-large-zh.bmp"));
+        const auto large_font = view.m_font;
+        view.m_font = original_font; view.m_lineHeight = original_height;
+        view.SetAllControlFonts();
+        DeleteObject(large_font);
+        RECT restored{}; GetClientRect(hwnd, &restored);
+        view.ResizeChildren(restored.right, restored.bottom);
     }
     SYSTEMTIME selected{};
     DateTime_GetSystemtime(view.m_endTimePicker, &selected);
@@ -346,12 +591,40 @@ void CheckNetworkView(CProcNetPlugin& plugin, const std::filesystem::path& fixtu
     Check(ListView_GetTopIndex(view.m_list) == top && ListView_GetNextItem(view.m_list, -1, LVNI_SELECTED) == 30,
         "Live history refresh lost scrolling or selection");
     view.ToggleView();
+    CheckSummaryBorder(view);
     CaptureWindow(hwnd, L"build/network-realtime-en.bmp");
     Check(!plugin.SetNetworkAdapter(L"bad\tidentifier"), "Invalid adapter identifier was accepted");
     Check(plugin.SetNetworkAdapter(L"A") && plugin.GetNetworkSnapshot().preferredId == L"A", "Fixed adapter selection did not persist");
     Check(plugin.SetNetworkAdapter(L"") && plugin.GetNetworkSnapshot().preferredId.empty(), "Automatic adapter selection did not persist");
     DestroyWindow(hwnd);
-    std::cout << "PASS: bilingual network/process totals, 900/1200 layouts, text fit, adapter preferences, live range, fixed range, rendered screenshots" << std::endl;
+    std::cout << "PASS: bilingual footer order/spacing, exact native selection ranges, read-only text, stable selection during refresh, compact layouts, larger fonts and rendered screenshots" << std::endl;
+}
+void CheckSorting(CProcNetPlugin& plugin)
+{
+    CTrafficDetailWindow view(plugin);
+    std::vector<CProcNetPlugin::AppTrafficEntry> entries(3);
+    entries[0].exeName = L"z.exe"; entries[0].rxTotalBytes = 90; entries[0].txTotalBytes = 10;
+    entries[1].exeName = L"a.exe"; entries[1].rxTotalBytes = 20; entries[1].txTotalBytes = 100;
+    entries[2].exeName = L"b.exe"; entries[2].rxTotalBytes = 10; entries[2].txTotalBytes = 20;
+    view.m_viewMode = CTrafficDetailWindow::ViewMode::Total;
+    view.m_sortDirection = CTrafficDetailWindow::SortDirection::Descending;
+    view.m_sortColumn = 2; view.SortApps(entries);
+    Check(entries[0].exeName == L"z.exe", "Historical download sorting regressed");
+    view.m_sortColumn = 3; view.SortApps(entries);
+    Check(entries[0].exeName == L"a.exe", "Historical upload sorting regressed");
+    view.m_sortColumn = 4; view.SortApps(entries);
+    Check(entries[0].exeName == L"a.exe", "Historical total sorting regressed");
+    view.m_sortColumn = 1; view.m_sortDirection = CTrafficDetailWindow::SortDirection::Ascending; view.SortApps(entries);
+    Check(entries[0].exeName == L"a.exe" && entries[2].exeName == L"z.exe", "Program-name sorting regressed");
+    entries[0].rxBytesPerSec = 1; entries[0].txBytesPerSec = 9;
+    entries[1].rxBytesPerSec = 8; entries[1].txBytesPerSec = 2;
+    view.m_viewMode = CTrafficDetailWindow::ViewMode::Realtime;
+    view.m_sortDirection = CTrafficDetailWindow::SortDirection::Descending;
+    view.m_sortColumn = 2; view.SortApps(entries);
+    Check(entries[0].exeName == L"b.exe", "Live download-speed sorting regressed");
+    view.m_sortColumn = 3; view.SortApps(entries);
+    Check(entries[0].exeName == L"a.exe", "Live upload-speed sorting regressed");
+    std::cout << "PASS: program names, both live speeds, both history directions and total sorting\n";
 }
 
 void CheckUnicodeState(const std::filesystem::path& fixture)
@@ -379,7 +652,9 @@ void CheckIntegerFormatting()
         { 0, L"0 B" }, { 1023, L"1023 B" }, { 1024, L"1.0 KB" }, { 1280, L"1.2 KB" },
         { 1792, L"1.8 KB" }, { 1048575, L"1024.0 KB" }, { 1048576, L"1.00 MB" },
         { 1179648, L"1.12 MB" }, { 1441792, L"1.38 MB" }, { 1073741824ULL, L"1.00 GB" },
-        { 1207959552ULL, L"1.12 GB" }, { UINT64_MAX, L"17179869184.00 GB" }
+        { 1207959552ULL, L"1.12 GB" }, { 1ULL << 40, L"1.00 TB" }, { 1ULL << 50, L"1.00 PB" },
+        { 1ULL << 60, L"1.00 EB" }, { (1ULL << 60) + (1ULL << 57), L"1.12 EB" },
+        { (1ULL << 60) + (3ULL << 57), L"1.38 EB" }, { UINT64_MAX, L"16.00 EB" }
     };
     for (const auto& value : values)
     {
@@ -461,7 +736,8 @@ int wmain(int argc, wchar_t** argv)
     try
     {
         auto& plugin = CProcNetPlugin::Instance();
-        if (argc == 2)
+        const bool ui_only = argc == 2 && std::wstring(argv[1]) == L"--ui-only";
+        if (argc == 2 && !ui_only)
         {
             realIcons = true;
             plugin.m_historyStore.Initialize(argv[1]);
@@ -486,11 +762,12 @@ int wmain(int argc, wchar_t** argv)
             const auto fixture = std::filesystem::path(L"build") / (L"history-view-checks-" + std::to_wstring(GetTickCount64()));
             plugin.m_historyStore.Initialize(fixture.wstring());
             CheckAsyncIcons(plugin);
+            CheckSorting(plugin);
             CheckSummaries(fixture / L"summaries");
             CheckNetworkView(plugin, fixture);
             CheckUnicodeState(fixture / L"unicode");
             CheckIntegerFormatting();
-            CheckPausedCheckpoint(plugin, fixture / L"paused-checkpoint");
+            if (!ui_only) CheckPausedCheckpoint(plugin, fixture / L"paused-checkpoint");
         }
         CloseHandle(iconGate);
         return 0;

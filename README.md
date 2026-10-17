@@ -31,6 +31,8 @@
 3. 以**管理员身份**启动 TrafficMonitor。
 4. 打开插件管理器，确认插件已成功加载。
 
+已有历史数据升级前，请先备份并退出 TrafficMonitor，将 `HistoryTrafficTool` 放在主程序目录或其子目录内，再运行其中的 `UpdateTrafficHistory.cmd`。工具会自动识别格式，将插件历史、状态和缓存整理到主程序旁的 `history/`；官方历史文件不移动。完成前不要启动主程序；若新旧目录同时有数据，保留两份并先处理冲突，不要覆盖。
+
 ## 下载
 
 如果你不想自行编译插件，可以直接在 [Releases](../../releases) 页面下载预编译版本。
@@ -95,5 +97,3 @@ msbuild "ProcessTrafficPlugin.sln" /p:Configuration=Release /p:Platform=x64
 <img width="884" height="730" alt="image" src="https://github.com/user-attachments/assets/7f1a96af-bdb4-4a35-a988-9f3710ef8928" />
 
 <img width="884" height="730" alt="image" src="https://github.com/user-attachments/assets/486f07bc-de66-4087-8a69-532eb8838ccf" />
-
-

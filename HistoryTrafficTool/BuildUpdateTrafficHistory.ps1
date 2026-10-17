@@ -1,9 +1,8 @@
 $ErrorActionPreference = 'Stop'
 
-$root = Split-Path -Parent $PSScriptRoot
 $mainPath = Join-Path $PSScriptRoot 'UpdateTrafficHistory.ps1'
 $sourcePath = Join-Path $PSScriptRoot 'UpdateTrafficHistory.cs'
-$outputPath = Join-Path $root 'tools\UpdateTrafficHistory.cmd'
+$outputPath = Join-Path $PSScriptRoot 'UpdateTrafficHistory.cmd'
 
 $header = @'
 @echo off
@@ -13,9 +12,13 @@ set "TM_HISTORY_TOOL=%~f0"
 title Update Traffic History
 
 echo Update Traffic History
+echo Migration tool revision: 2026-10-17-r2
 echo.
 echo This tool directly converts all published GitHub history formats to the latest format.
-echo Already updated history is detected automatically and left unchanged.
+echo It creates history beside TrafficMonitor.exe and moves plugin data there.
+echo Latest-format files are moved unchanged, including state and adapter caches.
+echo Official history_traffic.dat and history_traffic.dat.bak stay in place.
+echo Conflicting old/new locations are never merged or overwritten.
 echo TrafficMonitor must be closed only when an adjustment is required.
 echo.
 powershell.exe -NoProfile -Command "Write-Host (-join [char[]](0x6CE8,0x610F,0xFF1A,0x4F7F,0x7528,0x524D,0x52A1,0x5FC5,0x81EA,0x884C,0x5907,0x4EFD,0x3002))"
@@ -42,7 +45,7 @@ set "EXIT_CODE=%ERRORLEVEL%"
 echo.
 if not "%EXIT_CODE%"=="0" (
     echo Failed. Error code: %EXIT_CODE%
-    echo Existing history files were kept when an operation failed.
+    echo Keep all original files and backups. Read the error above before retrying.
 )
 echo.
 if not "%TM_HISTORY_NO_PAUSE%"=="1" pause

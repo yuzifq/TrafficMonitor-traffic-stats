@@ -13,5 +13,6 @@ std::wstring PaddedNumber(std::uint64_t value, unsigned width);
 std::wstring FormatDate(const _SYSTEMTIME& time);
 std::wstring FormatDateTime(const _SYSTEMTIME& time, bool seconds = false, wchar_t separator = L' ');
 std::wstring ShortLabel(const std::wstring& exe_name, bool is_download);
+std::wstring GetHistoryDirectory();
 bool IsProtectedHistoryPath(const std::wstring& base_dir, const std::wstring& output_path);
 }

@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <cwctype>
-#include <filesystem>
 #include <unordered_map>
 #include <utility>
 
@@ -197,7 +196,7 @@ const wchar_t* CProcNetPlugin::GetInfoText(PluginInfoIndex index, CHistoryTraffi
     case TMI_COPYRIGHT:
         return L"Copyright (c) 2026 yuzifq";
     case TMI_VERSION:
-        return L"1.1.4";
+        return L"1.2.0";
     case TMI_URL:
         return L"https://github.com/yuzifq/TrafficMonitor-traffic-stats";
     case TMI_API_VERSION:
@@ -245,10 +244,6 @@ void CProcNetPlugin::OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data)
 {
     if (index == EI_CONFIG_DIR && data != nullptr)
     {
-        {
-            std::lock_guard<std::mutex> lock(m_historyMutex);
-            m_configDir = data;
-        }
         EnsureHistoryInitialized();
     }
 }
@@ -296,15 +291,19 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(co
     return result;
 }
 
-std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range, CHistoryTrafficStore::DisplayLanguage language) const
+std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range,
+    CHistoryTrafficStore::DisplayLanguage language, TotalsSummary* summary) const
 {
     std::lock_guard<std::mutex> lock(m_historyMutex);
     const auto all = m_historyStore.GetAllTimeTotal();
     const bool history_ready = m_historyStore.IsReady();
     const auto selected = history_ready ? m_historyStore.GetRangeTotal(range) : CHistoryTrafficStore::TrafficAmount{};
+    const bool range_healthy = history_ready && m_historyStore.IsRangeHealthy(range);
+    const bool all_readable = m_historyStore.IsAllTimeHealthy();
     const auto network = m_networkStore.GetRange(range);
     bool all_healthy{};
     const auto network_all = m_networkStore.GetAllTimeTotal(&all_healthy);
+    if (summary) *summary = { network.amount, network_all, selected, all, network.available, range_healthy, all_readable };
     std::wstring text;
     if (network.available)
     {
@@ -324,13 +323,13 @@ std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTim
     text += L"\r\n";
     text += GetLocalizedText(language, { L"Network all-time D/U: ", L"网卡累计 下/上: " });
     text += Utils::FormatBytes(network_all.rxBytes) + L" / " + Utils::FormatBytes(network_all.txBytes) + L"\r\n\r\n";
-    if (history_ready)
+    if (range_healthy)
     {
         AppendTrafficBlock(text, language, selected, kRangeDownload, kRangeUpload, kRangeTotal);
-        text += L"\r\n";
-        AppendTrafficBlock(text, language, all, kAllTimeDownload, kAllTimeUpload, kAllTimeTotal);
     }
     else text += GetLocalizedText(language, { L"Process history unavailable: recovery pending", L"进程历史暂不可用: 等待安全恢复" });
+    text += L"\r\n";
+    if (all_readable) AppendTrafficBlock(text, language, all, kAllTimeDownload, kAllTimeUpload, kAllTimeTotal);
     text += L"\r\n";
     text += GetLocalizedText(language, { L"Network / ETW: ", L"网卡 / ETW: " });
     text += NetworkStatus(m_networkCollector.GetSnapshot().status, language);
@@ -376,9 +375,19 @@ std::wstring CProcNetPlugin::BuildDiagnosticsText(CHistoryTrafficStore::DisplayL
     line({ L"Matched probing connections: ", L"已匹配验证连接: " }, d.probing);
     line({ L"EStats official connections: ", L"EStats 正式入账连接: " }, d.active);
     line({ L"Verified source handoffs: ", L"已验证来源切换: " }, d.sources.switches);
-    line({ L"Source fallbacks: ", L"来源回退: " }, d.sources.fallbacks);
-    line({ L"Rejected counter intervals: ", L"已拒绝异常计数区间: " }, d.sources.rejected);
-    line({ L"Incomplete connection intervals: ", L"连接覆盖不完整区间: " }, d.sources.gaps);
+    line({ L"Normal connection closes: ", L"正常连接关闭: " }, d.sources.normalCloses);
+    line({ L"EStats failure fallbacks: ", L"EStats 异常回退: " }, d.sources.fallbacks);
+    line({ L"Source validation refusals: ", L"来源验证拒绝: " }, d.sources.rejected);
+    line({ L"Sequence evidence mismatch: ", L"序列证据不一致: " }, d.sources.sequenceRejects);
+    line({ L"Identity/generation mismatch: ", L"身份或连接代数不匹配: " }, d.sources.identityRejects);
+    line({ L"Confirmed sequence coverage gaps: ", L"已确认序列覆盖缺口: " }, d.sources.gaps);
+    line({ L"Unproven connection intervals: ", L"连接完整性未证实区间: " }, d.sources.incomplete);
+    line({ L"ETW coverage-unknown intervals: ", L"ETW 覆盖未知区间: " }, d.captureUncertainIntervals);
+    line({ L"Open suppression guards: ", L"开放抑制窗口: " }, d.sources.activeWindows);
+    line({ L"Closed guards pending retirement: ", L"已关闭待回收窗口: " }, d.sources.closedWindows);
+    line({ L"Retired guards: ", L"累计回收窗口: " }, d.sources.reclaimedWindows);
+    line({ L"Late/ambiguous generation callbacks: ", L"迟到或连接代数有歧义的事件: " }, d.sources.staleEvents);
+    line({ L"Unclocked ambiguous callbacks: ", L"无有效时钟的歧义事件: " }, d.sources.unclockedEvents);
     line({ L"Proof session error: ", L"连接验证会话错误: " }, d.proof.error);
     line({ L"Proof parse failures: ", L"连接验证解析失败: " }, d.proof.parseFailures);
     line({ L"Proof lost events/buffers: ", L"连接验证丢失事件及缓冲区: " }, d.proof.eventsLost + d.proof.buffersLost);
@@ -392,9 +401,21 @@ std::wstring CProcNetPlugin::BuildDiagnosticsText(CHistoryTrafficStore::DisplayL
     line({ L"History scheduler failures: ", L"历史调度异常: " }, d.commitFailures);
     text += GetLocalizedText(language, { L"Unknown D/U: ", L"未归属 下/上: " });
     text += Utils::FormatBytes(d.unknownRx) + L" / " + Utils::FormatBytes(d.unknownTx) + L"\r\n";
+    const auto amount = [&](const LocalizedText& label, std::uint64_t rx, std::uint64_t tx) {
+        text += GetLocalizedText(language, label);
+        text += Utils::FormatBytes(rx) + L" / " + Utils::FormatBytes(tx) + L"\r\n";
+    };
+    amount({ L"Ambiguous withheld D/U (not proven loss): ", L"歧义暂不入账 下/上（非已证实丢失）: " }, d.sources.quarantinedRx, d.sources.quarantinedTx);
+    amount({ L"Session raw ETW D/U: ", L"本次采集原始 ETW 下/上: " }, d.rawRx, d.rawTx);
+    amount({ L"Session EStats ledger D/U: ", L"本次采集 EStats 入账 下/上: " }, d.sources.estatsRx, d.sources.estatsTx);
+    amount({ L"Session hybrid ledger D/U: ", L"本次采集混合入账 下/上: " }, d.formalRx, d.formalTx);
     std::lock_guard<std::mutex> lock(m_historyMutex);
+    line({ L"History write/checkpoint failures: ", L"历史写入或检查点失败: " }, m_historyWriteFailures);
     text += GetLocalizedText(language, { L"History: ", L"历史保存: " });
     text += m_historyStore.IsWriteHealthy() ? GetLocalizedText(language, { L"OK", L"正常" }) :
+        GetLocalizedText(language, { L"Write failed; retry pending", L"写入失败，等待重试" });
+    text += GetLocalizedText(language, { L"\r\nNetwork history: ", L"\r\n网卡历史保存: " });
+    text += m_networkStore.Healthy() ? GetLocalizedText(language, { L"OK", L"正常" }) :
         GetLocalizedText(language, { L"Write failed; retry pending", L"写入失败，等待重试" });
     const auto metadata = m_historyStore.GetEngineMetadata(m_historyStore.GetPreferredRange());
     text += L"\r\n";
@@ -529,7 +550,7 @@ void CProcNetPlugin::UpdateHistory()
     std::lock_guard<std::mutex> lock(m_historyMutex);
     if (!batch.sequence)
     {
-        m_historyStore.Checkpoint();
+        if (!m_historyStore.Checkpoint()) ++m_historyWriteFailures;
         return;
     }
     std::vector<CHistoryTrafficStore::AppTotalEntry> history_apps;
@@ -547,6 +568,7 @@ void CProcNetPlugin::UpdateHistory()
         m_lastHistorySampleSequence = batch.sequence;
         m_collector.Acknowledge(batch.sequence);
     }
+    else ++m_historyWriteFailures;
 }
 
 void CProcNetPlugin::EnsureCollectorStarted()
@@ -571,14 +593,7 @@ void CProcNetPlugin::EnsureHistoryInitialized()
         return;
     }
 
-    auto directory = m_configDir;
-    wchar_t executable[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, executable, MAX_PATH);
-    const auto executable_dir = std::filesystem::path(executable).parent_path();
-    std::error_code error;
-    if (std::filesystem::exists(executable_dir / L"app_traffic_state.tsv", error) ||
-        std::filesystem::exists(executable_dir / L"app_traffic_history", error)) directory = executable_dir.wstring();
-    m_historyStore.Initialize(directory);
+    m_historyStore.Initialize(Utils::GetHistoryDirectory());
     m_networkStore.Initialize(m_historyStore.GetStorageDirectory());
     m_networkCollector.SelectAdapter(m_networkStore.GetPreferredAdapter());
     m_historyInitialized = true;

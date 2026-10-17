@@ -13,6 +13,8 @@ class NativeCollector : public CEtwProcNetCollector
     std::uint64_t retransmits{};
     std::uint64_t rejectedRx{}, rejectedTx{}, rejectedTime{};
     std::vector<Traffic::NetworkEvent> examples;
+    std::map<DWORD, ProcessTrafficSnapshot> protocolPids;
+    std::uint16_t probePort{};
     DWORD pid;
     unsigned char protocol;
 public:
@@ -22,8 +24,15 @@ public:
         m_reportRejected = true;
         SetEventSink([](void* context, const Traffic::NetworkEvent& event) {
             auto& collector = *static_cast<NativeCollector*>(context);
-            if (event.key.pid != collector.pid || event.lifecycle || event.key.protocol != collector.protocol) return;
+            if (event.lifecycle || event.key.protocol != collector.protocol) return;
             std::lock_guard<std::mutex> lock(collector.mutex);
+            if (!event.preStart && !event.retransmit && (!collector.probePort ||
+                event.key.localPort == collector.probePort || event.key.remotePort == collector.probePort))
+            {
+                auto& observed = collector.protocolPids[event.key.pid];
+                (event.send ? observed.txTotalBytes : observed.rxTotalBytes) += event.bytes;
+            }
+            if (event.key.pid != collector.pid) return;
             if (event.preStart)
             {
                 (event.send ? collector.rejectedTx : collector.rejectedRx) += event.bytes;
@@ -43,6 +52,21 @@ public:
     }
     std::uint64_t GetRetransmitBytes() const { std::lock_guard<std::mutex> lock(mutex); return retransmits; }
     std::vector<Traffic::NetworkEvent> Examples() const { std::lock_guard<std::mutex> lock(mutex); return examples; }
+    void SetProbePort(std::uint16_t port) { std::lock_guard<std::mutex> lock(mutex); probePort = port; protocolPids.clear(); }
+    void ReportTrace(std::ostream& out) const
+    {
+        std::vector<unsigned char> bytes(sizeof(EVENT_TRACE_PROPERTIES) + 4096);
+        auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(bytes.data());
+        properties->Wnode.BufferSize = static_cast<ULONG>(bytes.size());
+        properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
+        const auto error = ControlTraceW(0, m_sessionName.c_str(), properties, EVENT_TRACE_CONTROL_QUERY);
+        out << "trace_config\terror\t" << error << "\tflushSeconds\t" << properties->FlushTimer
+            << "\tbufferKiB\t" << properties->BufferSize << "\tbuffers\t" << properties->NumberOfBuffers
+            << "\tflags\t" << properties->EnableFlags << "\towned\t" << m_ownsSession << '\n';
+        std::lock_guard<std::mutex> lock(mutex);
+        for (const auto& row : protocolPids) out << "observed_port_pid\t" << row.first << '\t'
+            << row.second.rxTotalBytes << '\t' << row.second.txTotalBytes << '\n';
+    }
     void ReportRejected(std::ostream& out) const
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -256,9 +280,16 @@ void NativeProbe(const wchar_t* output)
     Check(WSAStartup(MAKEWORD(2, 2), &wsa) == 0, "WSAStartup failed");
     try
     {
-        bool allEstatsExact = true;
         for (const bool ipv6 : { false, true })
         {
+            CHybridTrafficCollector hybrid;
+            hybrid.m_etw.m_includeLoopback = true;
+            hybrid.m_estats.m_includeLoopback = true;
+            hybrid.m_includeProofLoopback = true;
+            hybrid.m_etw.SetEventSink([](void* context, const Traffic::NetworkEvent& event) {
+                if (event.key.pid == GetCurrentProcessId()) static_cast<CHybridTrafficCollector*>(context)->OnEvent(event);
+            }, &hybrid);
+            Check(hybrid.Start(), "Cannot start native handoff validation");
             NativeCollector etw;
             etw.m_includeLoopback = true;
             etw.Start();
@@ -274,12 +305,14 @@ void NativeProbe(const wchar_t* output)
             CTcpEStatsCollector estats;
             estats.m_includeLoopback = true;
             bool found{};
+            Traffic::ConnectionKey nativeKey;
             for (const auto& row : estats.Poll())
                 if (row.key.pid == GetCurrentProcessId() && row.key.family == (ipv6 ? 6 : 4) && row.key.localPort == localPort)
                 {
                     Check(row.enabled && !row.error && row.baseline, "Cannot establish a clean EStats baseline");
                     out << (ipv6 ? "IPv6" : "IPv4") << "\tbaselineRx\t" << row.rx << "\tbaselineTx\t" << row.tx << '\n' << std::flush;
                     found = true;
+                    nativeKey = row.key;
                 }
             Check(found, "Owner connection table omitted the native test connection");
             Sleep(1800);
@@ -287,6 +320,11 @@ void NativeProbe(const wchar_t* output)
                 if (row.key.pid == GetCurrentProcessId() && row.key.family == (ipv6 ? 6 : 4) && row.key.localPort == localPort)
                     out << "quiescent-baseline\t" << (ipv6 ? 6 : 4) << "\trx\t" << row.rx << "\ttx\t" << row.tx
                         << "\tidleRxDelta\t" << row.rxDelta << "\tidleTxDelta\t" << row.txDelta << '\n' << std::flush;
+            const auto qualification = GetTickCount64() + 10000;
+            while (!hybrid.GetDiagnostics().sources.active && GetTickCount64() < qualification) Sleep(100);
+            Check(hybrid.GetDiagnostics().sources.active == 1, "Native bulk flow never obtained a verified zero-prefix handoff");
+            NativePathProbe pathStats(nativeKey);
+            const auto pathBefore = pathStats.Read();
             const auto before = etw.GetProcessTrafficSnapshot()[GetCurrentProcessId()];
             TransferSend(client.value, probeUpload, 0x5a);
             Sleep(300);
@@ -310,6 +348,18 @@ void NativeProbe(const wchar_t* output)
                     found = true;
                 }
             Check(found, "EStats test connection disappeared before final sampling");
+            const auto pathAfter = pathStats.Read();
+            out << "native_path\t" << (ipv6 ? 6 : 4) << "\tBytesRetrans\t"
+                << static_cast<DWORD>(pathAfter.BytesRetrans - pathBefore.BytesRetrans) << "\tPktsRetrans\t"
+                << pathAfter.PktsRetrans - pathBefore.PktsRetrans << '\n';
+            const auto callbackDeadline = GetTickCount64() + 7000;
+            while (GetTickCount64() < callbackDeadline)
+            {
+                const auto delivered = etw.GetProcessTrafficSnapshot()[GetCurrentProcessId()];
+                if (delivered.rxTotalBytes - before.rxTotalBytes >= probeDownload &&
+                    delivered.txTotalBytes - before.txTotalBytes >= probeUpload) break;
+                Sleep(100);
+            }
             const auto after = etw.GetProcessTrafficSnapshot()[GetCurrentProcessId()];
             const auto d = etw.GetDiagnostics();
             for (const auto& connection : estats.m_connections)
@@ -345,17 +395,26 @@ void NativeProbe(const wchar_t* output)
                 << "\tETWRetransmitBytes\t" << etw.GetRetransmitBytes() << '\n' << std::flush;
             if (rx != probeDownload || tx != probeUpload)
             {
-                allEstatsExact = false;
-                out << "MISMATCH\tEStats versus known TCP payload\n" << std::flush;
+                out << "MISMATCH\traw Data counters are not verified application payload; a refusal is required\n" << std::flush;
             }
             Check(after.rxTotalBytes - before.rxTotalBytes == probeDownload && after.txTotalBytes - before.txTotalBytes == probeUpload,
                 "ETW did not match known native TCP payload bytes");
+            hybrid.Stop();
+            Traffic::U64 formalRx{}, formalTx{};
+            for (const auto& delta : hybrid.PeekPending().deltas) { formalRx += delta.rx; formalTx += delta.tx; }
+            const auto hybridHealth = hybrid.GetDiagnostics();
+            out << "hybrid\t" << (ipv6 ? 6 : 4) << "\trx\t" << formalRx << "\ttx\t" << formalTx
+                << "\tswitches\t" << hybridHealth.sources.switches << "\trejected\t" << hybridHealth.sources.rejected
+                << "\tfallbacks\t" << hybridHealth.sources.fallbacks << '\n' << std::flush;
+            Check(formalRx == probeDownload && formalTx == probeUpload,
+                "Verified bulk accounting did not preserve the known payload exactly");
+            if (rx != probeDownload || tx != probeUpload)
+                Check(hybridHealth.sources.rejected > 0, "A disagreeing native Data count was not rejected by the formal source");
             estats.Stop();
             etw.Stop();
         }
         ShortProbe(out);
-        Check(allEstatsExact, "EStats payload acceptance gate failed; do not activate it for official history");
-        out << "PASS\n";
+        out << "PASS: known payload, actual verified handoff, raw counter disagreements rejected and nonduplicating fallback\n";
     }
     catch (const std::exception& error) { out << "FAIL\t" << error.what() << '\n'; throw; }
     WSACleanup();

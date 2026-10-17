@@ -10,6 +10,7 @@
 #include <CommDlg.h>
 #include <Shellapi.h>
 #include <objbase.h>
+#include <Richedit.h>
 
 #include <algorithm>
 #include <array>
@@ -45,7 +46,10 @@ constexpr int kExportButtonId = 1018;
 constexpr int kAdapterComboId = 1019;
 constexpr int kFollowRangeId = 1020;
 constexpr int kDiagnosticsId = 1021;
+constexpr int kDetailsId = 1022;
+constexpr int kDetailsTextId = 1023;
 constexpr int kSummaryId = 1003;
+constexpr int kSummaryTextId = 1024;
 constexpr int kListId = 1004;
 constexpr int kMargin = 10;
 constexpr int kButtonWidth = 160;
@@ -56,7 +60,7 @@ constexpr int kRangeLabelWidth = 84;
 constexpr int kRangeDateWidth = 130;
 constexpr int kRangeTimeWidth = 88;
 constexpr int kSummaryWidth = 420;
-constexpr int kSummaryHeight = 234;
+constexpr int kSummaryHeight = 180;
 constexpr int kLiveSummaryHeight = 50;
 constexpr int kQuickButtonWidth = 58;
 constexpr int kQuickButtonHeight = 28;
@@ -67,6 +71,8 @@ constexpr int kLabelHeight = 20;
 constexpr int kComboDropHeight = 200;
 constexpr int kListInitialHeight = 500;
 constexpr int kCheckBoxHeight = 22;
+constexpr int kSummaryGap = 14;
+constexpr int kTotalsGap = 12;
 
 struct LocalizedText
 {
@@ -315,6 +321,105 @@ std::wstring BuildExportFileName(const CHistoryTrafficStore::DateTimeRange& rang
     if (!same_day) name += L"_" + Utils::FormatDate(range.end);
     return name + L".tsv";
 }
+
+struct SummaryTableLayout
+{
+    int left{}, right{}, top{}, labelWidth{}, rowHeight{}, dataHeight{}, height{};
+};
+
+SummaryTableLayout SummaryLayout(RECT area, HDC dc, int line_height, CHistoryTrafficStore::DisplayLanguage language)
+{
+    const int original_top = area.top;
+    InflateRect(&area, -6, -6);
+    SIZE network_size{}, process_size{};
+    const auto network_label = GetLocalizedText(language, { L"Network", L"网卡" });
+    const auto process_label = GetLocalizedText(language, { L"Process", L"进程" });
+    GetTextExtentPoint32W(dc, network_label, static_cast<int>(wcslen(network_label)), &network_size);
+    GetTextExtentPoint32W(dc, process_label, static_cast<int>(wcslen(process_label)), &process_size);
+    const int label_width = (std::max)(network_size.cx, process_size.cx) + 8;
+    const int width = area.right - area.left;
+    const int half = width / 2, row_height = line_height + 2;
+    const int values_left = area.left + label_width;
+    const int values_width = area.right - values_left;
+    int data_height = line_height + 4;
+    // Reserve wrapping space only when the current font needs it for a byte value.
+    for (const auto text : { L"1024.00 KB", L"1024.00 MB", L"1024.00 GB", L"1024.00 TB", L"1024.00 PB", L"1024.00 EB" })
+    {
+        RECT measured{ 0, 0, values_width / 4 - 4, 0 };
+        DrawTextW(dc, text, -1, &measured, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        data_height = (std::max)(data_height, static_cast<int>(measured.bottom) + 4);
+    }
+    for (const auto label : { LocalizedText{ L"Process range total: ", L"进程区间总量: " },
+        LocalizedText{ L"Network range total: ", L"网卡区间总量: " }, LocalizedText{ L"All-time total: ", L"累计总量: " } })
+    {
+        wchar_t text[64];
+        const auto caption = GetLocalizedText(language, label);
+        const auto length = wcslen(caption);
+        std::copy_n(caption, length, text);
+        std::copy_n(L"1024.00 MB", 11, text + length);
+        RECT measured{ 0, 0, half - 4, 0 };
+        DrawTextW(dc, text, -1, &measured, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        data_height = (std::max)(data_height, static_cast<int>(measured.bottom) + 4);
+    }
+    const int content_height = row_height * 2 + data_height * 4 + kTotalsGap;
+    const int group_top = area.top + (std::max)(0, (static_cast<int>(area.bottom - area.top) - content_height) / 2);
+    return { area.left, area.right, group_top, label_width, row_height, data_height,
+        content_height + static_cast<int>(area.top) - original_top + 6 };
+}
+
+struct DetailsDialogData
+{
+    std::wstring text;
+    HFONT font{};
+    CHistoryTrafficStore::DisplayLanguage language{};
+    const wchar_t* title{};
+};
+
+void LayoutDetailsDialog(HWND hwnd)
+{
+    RECT area{};
+    GetClientRect(hwnd, &area);
+    MoveControlIfPresent(GetDlgItem(hwnd, kDetailsTextId), 10, 10, area.right - 20, area.bottom - 58);
+    MoveControlIfPresent(GetDlgItem(hwnd, IDOK), area.right - 110, area.bottom - 38, 100, 28);
+}
+
+INT_PTR CALLBACK DetailsDialogProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param)
+{
+    if (message == WM_INITDIALOG)
+    {
+        const auto& data = *reinterpret_cast<DetailsDialogData*>(l_param);
+        SetWindowTextW(hwnd, data.title);
+        const auto edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", data.text.c_str(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+            0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kDetailsTextId)), GetModuleHandleW(nullptr), nullptr);
+        const auto close = CreateChildWindow(L"BUTTON", GetLocalizedText(data.language, { L"Close", L"关闭" }),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd, IDOK);
+        SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(data.font), TRUE);
+        SendMessageW(close, WM_SETFONT, reinterpret_cast<WPARAM>(data.font), TRUE);
+        LayoutDetailsDialog(hwnd);
+        SetFocus(edit);
+        SendMessageW(edit, EM_SETSEL, 0, 0);
+        return FALSE;
+    }
+    if (message == WM_SIZE) { LayoutDetailsDialog(hwnd); return TRUE; }
+    if (message == WM_GETMINMAXINFO)
+    {
+        reinterpret_cast<MINMAXINFO*>(l_param)->ptMinTrackSize = { 400, 260 };
+        return TRUE;
+    }
+    if (message == WM_CTLCOLORSTATIC && reinterpret_cast<HWND>(l_param) == GetDlgItem(hwnd, kDetailsTextId))
+    {
+        SetTextColor(reinterpret_cast<HDC>(w_param), GetSysColor(COLOR_WINDOWTEXT));
+        SetBkColor(reinterpret_cast<HDC>(w_param), GetSysColor(COLOR_WINDOW));
+        return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+    }
+    if (message == WM_CLOSE || (message == WM_COMMAND && (LOWORD(w_param) == IDOK || LOWORD(w_param) == IDCANCEL)))
+    {
+        EndDialog(hwnd, IDOK);
+        return TRUE;
+    }
+    return FALSE;
+}
 }
 
 CTrafficDetailWindow::CTrafficDetailWindow(CProcNetPlugin& plugin)
@@ -504,6 +609,8 @@ void CTrafficDetailWindow::CreateChildControls(HWND hwnd)
     m_exportButton = CreateChildWindow(
         L"BUTTON", L"Export", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         end_left, kMargin + kRangeRowSpacing * 3, 120, kButtonHeight, hwnd, kExportButtonId);
+    m_detailsButton = CreateChildWindow(L"BUTTON", L"Details", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        end_left, 650, 120, kButtonHeight, hwnd, kDetailsId);
 
     m_dayRangeButton = CreateChildWindow(
         L"BUTTON", L"日", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -525,10 +632,17 @@ void CTrafficDetailWindow::CreateChildControls(HWND hwnd)
     ListView_SetExtendedListViewStyle(m_list, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER | LVS_EX_HEADERDRAGDROP);
     EnsureImageList();
 
-    m_summary = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-        WS_CHILD | ES_LEFT | ES_MULTILINE | ES_READONLY,
+    m_summary = CreateWindowExW(0, L"STATIC", L"",
+        WS_CHILD | WS_CLIPCHILDREN | SS_OWNERDRAW,
         kMargin, 450, 280, kSummaryHeight, hwnd,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSummaryId)), GetModuleHandleW(nullptr), nullptr);
+    static const auto rich_edit = LoadLibraryExW(L"Msftedit.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    m_summaryContent = CreateWindowExW(0, rich_edit ? MSFTEDIT_CLASS : L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_MULTILINE | ES_READONLY,
+        6, 6, 268, kSummaryHeight - 12, m_summary,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSummaryTextId)), GetModuleHandleW(nullptr), nullptr);
+    SetWindowSubclass(m_summaryContent, SummarySubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
+    SendMessageW(m_summaryContent, EM_SETEDITSTYLE, SES_HIDEGRIDLINES, SES_HIDEGRIDLINES);
 
     ApplyCurrentRangeToControls();
     ApplyRangeControls();
@@ -542,7 +656,8 @@ void CTrafficDetailWindow::SetAllControlFonts() const
         m_toggleViewButton, m_languageLabel, m_languageCombo, m_pauseRefreshButton,
         m_startLabel, m_startDatePicker, m_startTimePicker, m_endLabel, m_endDatePicker,
         m_endTimePicker, m_hidePidCheck, m_exportButton, m_dayRangeButton, m_weekRangeButton,
-        m_monthRangeButton, m_yearRangeButton, m_list, m_summary, m_adapterLabel, m_adapterCombo, m_followRangeCheck, m_diagnosticsButton
+        m_monthRangeButton, m_yearRangeButton, m_list, m_summary, m_adapterLabel, m_adapterCombo, m_followRangeCheck, m_diagnosticsButton,
+        m_detailsButton, m_summaryContent
     };
 
     for (HWND control : controls)
@@ -684,6 +799,144 @@ void CTrafficDetailWindow::ExportSelectedRange()
     MessageBoxW(m_hwnd, message.c_str(), GetLocalizedText(language, { L"Export", L"导出" }), MB_OK | MB_ICONERROR);
 }
 
+std::wstring CTrafficDetailWindow::BuildDetailsText() const
+{
+    const auto language = GetSelectedLanguage();
+    const auto range = GetSelectedRange();
+    std::wstring text = GetLocalizedText(language, { L"Start: ", L"开始时间: " });
+    text += Utils::FormatDateTime(range.start) + L"\r\n";
+    text += GetLocalizedText(language, { L"End: ", L"结束时间: " });
+    text += Utils::FormatDateTime(range.end) + L"\r\n";
+    const auto selected = ComboBox_GetCurSel(m_adapterCombo);
+    if (selected >= 0 && static_cast<size_t>(selected) < m_adapterLabels.size())
+    {
+        text += GetLocalizedText(language, { L"Adapter: ", L"采集网卡: " });
+        text += m_adapterLabels[selected] + L"\r\n";
+    }
+    return text + L"\r\n" + m_summaryText;
+}
+
+void CTrafficDetailWindow::ShowDetails()
+{
+    ShowText(BuildDetailsText(), GetLocalizedText(GetSelectedLanguage(), { L"Traffic Details", L"流量详细信息" }));
+}
+
+void CTrafficDetailWindow::ShowText(const std::wstring& text, const wchar_t* title)
+{
+    // A fixed snapshot lets selection/copying coexist with background collection.
+    DetailsDialogData data{ text, m_font, GetSelectedLanguage(), title };
+    struct { DLGTEMPLATE dialog; WORD menu{}, windowClass{}, title{}; } definition{};
+    definition.dialog.style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | DS_MODALFRAME | DS_CENTER;
+    definition.dialog.cx = 340;
+    definition.dialog.cy = 240;
+    if (DialogBoxIndirectParamW(GetModuleHandleW(nullptr), &definition.dialog, m_hwnd,
+        DetailsDialogProc, reinterpret_cast<LPARAM>(&data)) == -1)
+        MessageBoxW(m_hwnd, data.text.c_str(), title, MB_OK);
+}
+
+void CTrafficDetailWindow::UpdateSummaryContent() const
+{
+    if (!m_summaryContent) return;
+    // This fixed-size panel stays well below EM_GETSEL's 64K character limit.
+    const auto selection = SendMessageW(m_summaryContent, EM_GETSEL, 0, 0);
+    if (LOWORD(selection) != HIWORD(selection) || GetCapture() == m_summaryContent) return;
+    const auto language = GetSelectedLanguage();
+    RECT area{};
+    GetClientRect(m_summary, &area);
+    const auto dc = GetDC(m_summary);
+    const auto old_font = SelectObject(dc, m_font ? m_font : GetStockObject(DEFAULT_GUI_FONT));
+    const auto layout = SummaryLayout(area, dc, m_lineHeight, language);
+    const int dpi_x = GetDeviceCaps(dc, LOGPIXELSX), dpi_y = GetDeviceCaps(dc, LOGPIXELSY);
+    SelectObject(dc, old_font); ReleaseDC(m_summary, dc);
+    const int top = m_viewMode == ViewMode::Total ? layout.top : 6;
+    MoveControlIfPresent(m_summaryContent, 6, top, area.right - 12, area.bottom - top - 6);
+    RECT text_area{ 0, 0, area.right - 12, area.bottom - top - 6 };
+    SendMessageW(m_summaryContent, EM_SETRECT, 0, reinterpret_cast<LPARAM>(&text_area));
+    if (m_viewMode == ViewMode::Realtime || !SendMessageW(m_summaryContent, EM_GETTEXTMODE, 0, 0))
+    {
+        SetWindowTextIfPresent(m_summaryContent, m_summaryText.c_str());
+        return;
+    }
+    std::vector<std::wstring> text(35);
+    const auto cell = [&](int row, int column) -> std::wstring& { return text[row * 5 + column]; };
+    cell(0, 1) = GetLocalizedText(language, { L"Range", L"区间" });
+    cell(0, 2) = GetLocalizedText(language, { L"All-Time", L"累计" });
+    cell(2, 0) = GetLocalizedText(language, { L"Network", L"网卡" });
+    cell(3, 0) = GetLocalizedText(language, { L"Process", L"进程" });
+    const LocalizedText download{ L"Down", L"下载" };
+    const LocalizedText upload{ L"Up", L"上传" };
+    const auto bytes = [](std::uint64_t value, bool available) { return available ? Utils::FormatBytes(value) : L"n/a"; };
+    const CHistoryTrafficStore::TrafficAmount amounts[][2] = {
+        { m_totals.networkRange, m_totals.networkAll }, { m_totals.processRange, m_totals.processAll }
+    };
+    for (int i = 0; i < 2; ++i)
+    {
+        for (int column = 0; column < 4; ++column)
+        {
+            cell(1, column + 1) = GetLocalizedText(language, column % 2 ? upload : download);
+            const auto& amount = amounts[i][column / 2];
+            const bool available = i ? (column >= 2 ? m_totals.processAllAvailable : m_totals.processAvailable) :
+                column >= 2 || m_totals.networkAvailable;
+            cell(i + 2, column + 1) = bytes(column % 2 ? amount.txBytes : amount.rxBytes, available);
+        }
+        const auto& range = amounts[1 - i][0];
+        const auto& all = amounts[1 - i][1];
+        cell(i + 5, 0) = GetLocalizedText(language, i ? LocalizedText{ L"Network range total: ", L"网卡区间总量: " } :
+            LocalizedText{ L"Process range total: ", L"进程区间总量: " }) +
+            bytes(range.rxBytes + range.txBytes, i ? m_totals.networkAvailable : m_totals.processAvailable);
+        cell(i + 5, 1) = GetLocalizedText(language, { L"All-time total: ", L"累计总量: " }) +
+            bytes(all.rxBytes + all.txBytes, i || m_totals.processAllAvailable);
+    }
+    const int values_left = layout.left + layout.labelWidth, values_width = layout.right - values_left;
+    const int groups[] = { values_left, values_left + values_width / 2, layout.right };
+    const int columns[] = { values_left, values_left + values_width / 4, values_left + values_width / 2,
+        values_left + values_width * 3 / 4, layout.right };
+    const int totals[] = { (layout.left + layout.right) / 2, layout.right };
+    SendMessageW(m_summaryContent, WM_SETREDRAW, FALSE, 0);
+    SetWindowTextW(m_summaryContent, L"");
+    SendMessageW(m_summaryContent, EM_SETBKGNDCOLOR, 0, GetSysColor(COLOR_WINDOW));
+    // Native table cells preserve alignment, wrapping and cross-cell selection.
+    for (int row = 0; row < 7; ++row)
+    {
+        const int count = row == 0 ? 3 : row < 4 ? 5 : row == 4 ? 1 : 2;
+        const auto right = row == 0 ? groups : row < 4 ? columns : row == 4 ? totals + 1 : totals;
+        const int height = row < 2 ? layout.rowHeight : row == 4 ? kTotalsGap : layout.dataHeight;
+        TABLEROWPARMS format{};
+        format.cbRow = sizeof(format); format.cbCell = sizeof(TABLECELLPARMS);
+        format.cRow = 1; format.cCell = static_cast<BYTE>(count); format.cpStartRow = -1;
+        format.dyHeight = -MulDiv(height, 1440, dpi_y);
+        TABLECELLPARMS cells[5]{};
+        int left = 6;
+        for (int column = 0; column < count; ++column)
+        {
+            auto& format_cell = cells[column];
+            format_cell.dxWidth = MulDiv(right[column] - left, 1440, dpi_x); format_cell.nVertAlign = 1;
+            format_cell.crBackPat = GetSysColor(COLOR_WINDOW);
+            left = right[column];
+        }
+        SendMessageW(m_summaryContent, EM_SETSEL, static_cast<WPARAM>(-1), -1);
+        const UINT insertion = LOWORD(SendMessageW(m_summaryContent, EM_GETSEL, 0, 0)) + 2;
+        SendMessageW(m_summaryContent, EM_INSERTTABLE, reinterpret_cast<WPARAM>(&format), reinterpret_cast<LPARAM>(cells));
+        SendMessageW(m_summaryContent, EM_SETSEL, insertion, insertion);
+        for (int column = 0; column < count; ++column)
+        {
+            PARAFORMAT2 paragraph{};
+            paragraph.cbSize = sizeof(paragraph); paragraph.dwMask = PFM_ALIGNMENT | PFM_SPACEBEFORE | PFM_SPACEAFTER;
+            paragraph.wAlignment = row < 4 && column ? PFA_CENTER : PFA_LEFT;
+            SendMessageW(m_summaryContent, EM_SETPARAFORMAT, 0, reinterpret_cast<LPARAM>(&paragraph));
+            SendMessageW(m_summaryContent, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(cell(row, column).c_str()));
+            const UINT position = HIWORD(SendMessageW(m_summaryContent, EM_GETSEL, 0, 0)) + 1;
+            SendMessageW(m_summaryContent, EM_SETSEL, position, position);
+        }
+    }
+    SendMessageW(m_summaryContent, EM_SETSEL, 0, 0);
+    POINT origin{};
+    SendMessageW(m_summaryContent, EM_SETSCROLLPOS, 0, reinterpret_cast<LPARAM>(&origin));
+    SendMessageW(m_summaryContent, EM_EMPTYUNDOBUFFER, 0, 0);
+    SendMessageW(m_summaryContent, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(m_summaryContent, nullptr, TRUE);
+}
+
 void CTrafficDetailWindow::ApplyLanguageTexts()
 {
     const auto language = GetSelectedLanguage();
@@ -695,6 +948,7 @@ void CTrafficDetailWindow::ApplyLanguageTexts()
     SetWindowTextIfPresent(m_endLabel, GetLocalizedText(language, { L"End:", L"结束时间:" }));
     SetWindowTextIfPresent(m_hidePidCheck, GetLocalizedText(language, { L"Hide anonymous PID items", L"隐藏匿名 PID 项" }));
     SetWindowTextIfPresent(m_exportButton, GetLocalizedText(language, { L"Export", L"导出" }));
+    SetWindowTextIfPresent(m_detailsButton, GetLocalizedText(language, { L"Details", L"详细信息" }));
     SetWindowTextIfPresent(m_dayRangeButton, GetLocalizedText(language, { L"Day", L"日" }));
     SetWindowTextIfPresent(m_weekRangeButton, GetLocalizedText(language, { L"Week", L"周" }));
     SetWindowTextIfPresent(m_monthRangeButton, GetLocalizedText(language, { L"Month", L"月" }));
@@ -828,7 +1082,7 @@ void CTrafficDetailWindow::ShowTotalViewControls(bool show)
     const HWND controls[] = {
         m_startLabel, m_startDatePicker, m_startTimePicker, m_endLabel,
         m_endDatePicker, m_endTimePicker, m_hidePidCheck, m_exportButton, m_dayRangeButton,
-        m_weekRangeButton, m_monthRangeButton, m_yearRangeButton, m_followRangeCheck
+        m_weekRangeButton, m_monthRangeButton, m_yearRangeButton, m_followRangeCheck, m_detailsButton
     };
 
     for (HWND control : controls)
@@ -853,7 +1107,9 @@ void CTrafficDetailWindow::UpdateViewSpecificControls()
     if (m_viewMode == ViewMode::Realtime)
     {
         FillRealtimeView();
-        SetWindowTextIfPresent(m_summary, m_plugin.BuildLiveNetworkText(GetSelectedLanguage()).c_str());
+        m_summaryText = m_plugin.BuildLiveNetworkText(GetSelectedLanguage());
+        SetWindowTextIfPresent(m_summary, m_summaryText.c_str());
+        InvalidateRect(m_summary, nullptr, FALSE);
         ShowWindow(m_summary, SW_SHOW);
         ShowTotalViewControls(false);
         ShowPauseRefreshButton(true);
@@ -861,7 +1117,9 @@ void CTrafficDetailWindow::UpdateViewSpecificControls()
     }
 
     FillTotalView();
-    SetWindowTextIfPresent(m_summary, m_plugin.BuildTotalsText(GetSelectedRange(), GetSelectedLanguage()).c_str());
+    m_summaryText = m_plugin.BuildTotalsText(GetSelectedRange(), GetSelectedLanguage(), &m_totals);
+    SetWindowTextIfPresent(m_summary, m_summaryText.c_str());
+    InvalidateRect(m_summary, nullptr, FALSE);
     if (m_summary != nullptr)
     {
         ShowWindow(m_summary, SW_SHOW);
@@ -1254,6 +1512,7 @@ void CTrafficDetailWindow::ResizeChildren(int width, int height)
     LayoutTopControls(width);
     LayoutBottomControls(width, height);
     LayoutListControl(width, height);
+    UpdateSummaryContent();
 }
 
 void CTrafficDetailWindow::ClearList()
@@ -1411,13 +1670,25 @@ void CTrafficDetailWindow::LayoutTopControls(int width)
     MoveControlIfPresent(m_adapterCombo, kMargin + kRangeLabelWidth, 48, width - kMargin * 2 - kRangeLabelWidth, 300);
 }
 
+int CTrafficDetailWindow::GetSummaryHeight() const
+{
+    if (m_viewMode == ViewMode::Realtime)
+        return (std::max)(kLiveSummaryHeight, m_lineHeight * 3 + 8);
+
+    const auto dc = GetDC(m_hwnd);
+    const auto old_font = SelectObject(dc, m_font ? m_font : GetStockObject(DEFAULT_GUI_FONT));
+    const auto layout = SummaryLayout({ 0, 0, kSummaryWidth, 0 }, dc, m_lineHeight, GetSelectedLanguage());
+    SelectObject(dc, old_font);
+    ReleaseDC(m_hwnd, dc);
+    return (std::max)(kSummaryHeight, layout.height);
+}
+
 void CTrafficDetailWindow::LayoutBottomControls(int width, int height)
 {
-    const int live_height = (std::max)(kLiveSummaryHeight, m_lineHeight * 3 + 8);
-    const int summary_height = (std::max)(kSummaryHeight, m_lineHeight * 14 + 8);
+    const int summary_height = GetSummaryHeight();
     if (m_viewMode == ViewMode::Realtime)
     {
-        MoveControlIfPresent(m_summary, kMargin, height - kMargin - live_height, width - kMargin * 2, live_height);
+        MoveControlIfPresent(m_summary, kMargin, height - kMargin - summary_height, width - kMargin * 2, summary_height);
         return;
     }
 
@@ -1433,8 +1704,9 @@ void CTrafficDetailWindow::LayoutBottomControls(int width, int height)
     MoveControlIfPresent(m_endDatePicker, picker_left, range_block_top + kRangeRowSpacing, kRangeDateWidth, 28);
     MoveControlIfPresent(m_endTimePicker, picker_left + kRangeDateWidth + 8, range_block_top + kRangeRowSpacing, kRangeTimeWidth, 28);
     MoveControlIfPresent(m_hidePidCheck, range_block_left, range_block_top + kRangeRowSpacing * 2 + 2, 220, kCheckBoxHeight);
-    MoveControlIfPresent(m_exportButton, range_block_left, range_block_top + kRangeRowSpacing * 3, 120, kButtonHeight);
-    MoveControlIfPresent(m_followRangeCheck, range_block_left, range_block_top + kRangeRowSpacing * 4, 220, kCheckBoxHeight);
+    MoveControlIfPresent(m_followRangeCheck, range_block_left, range_block_top + kRangeRowSpacing * 3 + 2, 220, kCheckBoxHeight);
+    MoveControlIfPresent(m_detailsButton, range_block_left, height - kMargin - kButtonHeight, 120, kButtonHeight);
+    MoveControlIfPresent(m_exportButton, width - kMargin - 120, height - kMargin - kButtonHeight, 120, kButtonHeight);
     MoveControlIfPresent(m_dayRangeButton, quick_button_left, range_block_top, kQuickButtonWidth, kQuickButtonHeight);
     MoveControlIfPresent(m_weekRangeButton, quick_button_left, range_block_top + kRangeRowSpacing, kQuickButtonWidth, kQuickButtonHeight);
     MoveControlIfPresent(m_monthRangeButton, quick_button_left, range_block_top + kRangeRowSpacing * 2, kQuickButtonWidth, kQuickButtonHeight);
@@ -1444,15 +1716,9 @@ void CTrafficDetailWindow::LayoutBottomControls(int width, int height)
 void CTrafficDetailWindow::LayoutListControl(int width, int height)
 {
     const int list_width = width - kMargin * 2;
-    const int summary_height = m_viewMode == ViewMode::Realtime ?
-        (std::max)(kLiveSummaryHeight, m_lineHeight * 3 + 8) : (std::max)(kSummaryHeight, m_lineHeight * 14 + 8);
-    if (m_viewMode == ViewMode::Realtime)
-    {
-        MoveControlIfPresent(m_list, kMargin, kTopAreaHeight, list_width, height - kTopAreaHeight - summary_height - kMargin * 2);
-        return;
-    }
-
-    MoveControlIfPresent(m_list, kMargin, kTopAreaHeight, list_width, height - kTopAreaHeight - summary_height - kMargin * 2);
+    const int summary_height = GetSummaryHeight();
+    MoveControlIfPresent(m_list, kMargin, kTopAreaHeight, list_width,
+        height - kTopAreaHeight - summary_height - kMargin - kSummaryGap);
 }
 
 bool CTrafficDetailWindow::IsInteractiveControlActive() const
@@ -1509,7 +1775,12 @@ bool CTrafficDetailWindow::HandleCommand(WORD command_id, WORD notify_code)
     {
         const auto language = GetSelectedLanguage();
         const auto text = m_plugin.BuildDiagnosticsText(language);
-        MessageBoxW(m_hwnd, text.c_str(), GetLocalizedText(language, { L"Diagnostics", L"诊断" }), MB_OK | MB_ICONINFORMATION);
+        ShowText(text, GetLocalizedText(language, { L"Diagnostics", L"诊断" }));
+        return true;
+    }
+    if (command_id == kDetailsId)
+    {
+        ShowDetails();
         return true;
     }
     if (command_id == kDayRangeButtonId || command_id == kWeekRangeButtonId ||
@@ -1644,8 +1915,10 @@ void CTrafficDetailWindow::ResetControlHandles()
     m_endLabel = m_endDatePicker = m_endTimePicker = m_hidePidCheck = m_exportButton = nullptr;
     m_dayRangeButton = m_weekRangeButton = nullptr;
     m_monthRangeButton = m_yearRangeButton = m_summary = nullptr;
+    m_summaryContent = nullptr;
     m_adapterLabel = m_adapterCombo = m_followRangeCheck = nullptr;
     m_diagnosticsButton = nullptr;
+    m_detailsButton = nullptr;
     m_adapterIds.clear();
     m_adapterLabels.clear();
 }
@@ -1654,6 +1927,15 @@ LRESULT CTrafficDetailWindow::HandleMessage(HWND hwnd, UINT message, WPARAM w_pa
 {
     switch (message)
     {
+    case WM_DRAWITEM:
+        if (w_param == kSummaryId && l_param)
+        {
+            const auto& item = *reinterpret_cast<DRAWITEMSTRUCT*>(l_param);
+            FillRect(item.hDC, &item.rcItem, GetSysColorBrush(COLOR_WINDOW));
+            FrameRect(item.hDC, &item.rcItem, GetSysColorBrush(COLOR_3DSHADOW));
+            return TRUE;
+        }
+        break;
     case WM_GETMINMAXINFO:
         reinterpret_cast<MINMAXINFO*>(l_param)->ptMinTrackSize = { 900, 680 };
         return 0;
@@ -1722,4 +2004,38 @@ LRESULT CALLBACK CTrafficDetailWindow::StaticWndProc(HWND hwnd, UINT message, WP
     }
 
     return DefWindowProcW(hwnd, message, w_param, l_param);
+}
+
+LRESULT CALLBACK CTrafficDetailWindow::SummarySubclassProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param,
+    UINT_PTR subclass_id, DWORD_PTR reference)
+{
+    if (message == WM_CONTEXTMENU)
+    {
+        auto& view = *reinterpret_cast<CTrafficDetailWindow*>(reference);
+        const auto language = view.GetSelectedLanguage();
+        SetFocus(hwnd);
+        const auto selection = SendMessageW(hwnd, EM_GETSEL, 0, 0);
+        const auto menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING | (LOWORD(selection) == HIWORD(selection) ? MF_GRAYED : 0), 1,
+            GetLocalizedText(language, { L"Copy", L"复制" }));
+        AppendMenuW(menu, MF_STRING, 2, GetLocalizedText(language, { L"Select All", L"全选" }));
+        POINT point{ GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param) };
+        if (point.x == -1 && point.y == -1) { point = { 10, 10 }; ClientToScreen(hwnd, &point); }
+        const bool paused = view.m_refreshPaused;
+        view.m_refreshPaused = true;
+        const auto command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, hwnd, nullptr);
+        view.m_refreshPaused = paused;
+        DestroyMenu(menu);
+        if (command == 1)
+        {
+            SendMessageW(hwnd, EM_SETSEL, LOWORD(selection), HIWORD(selection));
+            SendMessageW(hwnd, WM_COPY, 0, 0);
+        }
+        if (command == 2) SendMessageW(hwnd, EM_SETSEL, 0, -1);
+        if (GetFocus() != hwnd) SendMessageW(hwnd, EM_SETSEL, 0, 0);
+        return 0;
+    }
+    if (message == WM_KILLFOCUS) SendMessageW(hwnd, EM_SETSEL, 0, 0);
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(hwnd, SummarySubclassProc, subclass_id);
+    return DefSubclassProc(hwnd, message, w_param, l_param);
 }

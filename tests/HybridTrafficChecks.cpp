@@ -18,6 +18,8 @@
 #define private public
 #include "../ProcessTrafficPlugin/HybridTrafficCollector.h"
 #include "../ProcessTrafficPlugin/TcpProofCollector.h"
+#include "../ProcessTrafficPlugin/HistoryTrafficStore.h"
+#include "../ProcessTrafficPlugin/NetworkTrafficStore.h"
 #undef private
 #include "../ProcessTrafficPlugin/TcpEStatsCollector.cpp"
 #include "../ProcessTrafficPlugin/EtwProcNetCollector.cpp"
@@ -224,6 +226,10 @@ void LedgerChecks()
     Check(engine.PeekPending().sequence == second.sequence, "A stale acknowledgment discarded a newer batch");
     engine.Acknowledge(second.sequence);
     Check(!engine.PeekPending().sequence, "Committed batch was replayed");
+    const auto counters = engine.GetDiagnostics();
+    Check(counters.rawRx == 400 && counters.rawTx == 800 && counters.formalRx == 400 && counters.formalTx == 800 &&
+        counters.etwFormalRx == 400 && counters.etwFormalTx == 800,
+        "Accounting counters were consumed by reads or duplicated by retries/ACKs");
     shadow.error = ERROR_NOT_FOUND;
     engine.m_sources.Observe(shadow); engine.DrainSources();
     Check(!engine.PeekPending().sequence, "Failure of an unqualified source fabricated a traffic batch");
@@ -294,6 +300,69 @@ void LiveHybrid(const wchar_t* path)
     collector.Stop();
     out << "done\n";
 }
+void CaptureHealthChecks()
+{
+    CHybridTrafficCollector engine;
+    CEtwProcNetCollector::Diagnostics diagnostics;
+    diagnostics.clockType = 1;
+    auto now = Traffic::FileTimeNow();
+    engine.m_lastPublish = now;
+    const auto sample = [&](bool running = true) {
+        now += 10000000;
+        engine.RecordCaptureHealth(diagnostics, now, running);
+        engine.Publish(now);
+    };
+    sample();
+    Check(!engine.PeekPending().sequence, "Healthy idle capture fabricated an error marker");
+    diagnostics.queryError = ERROR_ACCESS_DENIED;
+    sample();
+    const auto failed = engine.PeekPending();
+    Check(failed.deltas.size() == 1 && !failed.deltas[0].rx && !failed.deltas[0].tx &&
+        failed.deltas[0].confidence == Traffic::Confidence::Incomplete && !engine.GetDiagnostics().sources.gaps,
+        "Silent capture failure had no quality evidence or fabricated missing bytes");
+    const auto fixture = std::filesystem::absolute(L"build") /
+        (L"capture-health-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
+    Check(!std::filesystem::exists(fixture), "Capture health fixture must be unique");
+    std::filesystem::create_directories(fixture);
+    CHistoryTrafficStore history;
+    history.Initialize(fixture.wstring());
+    const auto& delta = failed.deltas[0];
+    CHistoryTrafficStore::AppTotalEntry marker{ delta.name, delta.path, 0, 0 };
+    marker.identity = delta.identity; marker.sampleStart = delta.start; marker.sampleEnd = delta.end;
+    marker.source = delta.source; marker.confidence = delta.confidence;
+    Check(history.Update({ marker }) && history.Checkpoint(true), "Capture error-only history checkpoint failed");
+    CHistoryTrafficStore reopened;
+    reopened.Initialize(fixture.wstring());
+    Check((reopened.GetEngineMetadata(reopened.GetPreferredRange()).confidence & 2) &&
+        !reopened.GetAllTimeTotal().rxBytes && !reopened.GetAllTimeTotal().txBytes,
+        "Capture error-only quality was lost at restart or converted into traffic");
+    engine.Acknowledge(failed.sequence);
+    diagnostics.queryError = NO_ERROR;
+    sample();
+    engine.Acknowledge(engine.PeekPending().sequence);
+    sample();
+    Check(!engine.PeekPending().sequence && !engine.m_captureIncomplete,
+        "A resolved capture failure permanently tainted subsequent intervals");
+    diagnostics.eventsLost = 2;
+    sample();
+    engine.Acknowledge(engine.PeekPending().sequence);
+    sample();
+    engine.Acknowledge(engine.PeekPending().sequence);
+    sample();
+    Check(!engine.PeekPending().sequence && !engine.m_captureIncomplete &&
+        engine.GetDiagnostics().etw.eventsLost == 2 && !engine.GetDiagnostics().sources.gaps,
+        "Cumulative native loss became permanent interval loss or invented sequence gaps");
+    diagnostics.parseFailures = 1; diagnostics.endpointFailures = 1; diagnostics.sessionResets = 1;
+    sample();
+    Check(engine.PeekPending().sequence && engine.GetDiagnostics().captureUncertainIntervals == 5,
+        "Parser/session failures were not recorded as interval uncertainty");
+    engine.Acknowledge(engine.PeekPending().sequence);
+    sample(false);
+    Check(engine.PeekPending().sequence && !engine.GetDiagnostics().formalRx && !engine.GetDiagnostics().formalTx,
+        "Stopped idle capture was treated as measured zero or invented bytes");
+    std::cout << "PASS: capture/query/loss/parser uncertainty survives zero-byte restart, recovery does not taint future intervals\n";
+}
+
 void SchedulerChecks()
 {
     struct CommitContext
@@ -355,7 +424,10 @@ void SchedulerChecks()
 #include "TcpProofParserChecks.cpp"
 #include "TcpSourceChecks.cpp"
 #include "NativeSourceChecks.cpp"
+#include "NativeWindowChecks.cpp"
 #include "NaturalTrafficAudit.cpp"
+#include "AccountingWindowChecks.cpp"
+#include "NativeQuicChecks.cpp"
 int wmain(int argc, wchar_t** argv)
 {
     try
@@ -363,6 +435,9 @@ int wmain(int argc, wchar_t** argv)
         if (argc == 4 && std::wstring(argv[1]) == L"--probe-server") return ProbeServer(std::wstring(argv[2]) == L"6", std::wstring(argv[3]) == L"short", std::wstring(argv[3]) == L"steps");
         if (argc == 3 && std::wstring(argv[1]) == L"--steps") { NativeStepProbe(argv[2]); return 0; }
         if (argc == 3 && std::wstring(argv[1]) == L"--sources") { NativeSourceProbe(argv[2]); return 0; }
+        if (argc == 3 && std::wstring(argv[1]) == L"--windows") { NativeWindowProbe(argv[2]); return 0; }
+        if (argc == 3 && std::wstring(argv[1]) == L"--accounting-window") { AccountingWindowProbe(argv[2]); return 0; }
+        if (argc == 3 && std::wstring(argv[1]) == L"--quic") { NativeQuicProbe(argv[2]); return 0; }
         if (argc == 3 && std::wstring(argv[1]) == L"--hybrid-short") { NativeHybridShortProbe(argv[2]); return 0; }
         if (argc == 3 && std::wstring(argv[1]) == L"--endpoints") { NativeEndpointProbe(argv[2]); return 0; }
         if (argc == 3 && std::wstring(argv[1]) == L"--mixed") { NativeMixedProbe(argv[2]); return 0; }
@@ -379,7 +454,7 @@ int wmain(int argc, wchar_t** argv)
         if (argc == 3 && std::wstring(argv[1]) == L"--audit-counters") { OfficialCountersAudit(argv[2]); return 0; }
         if (argc == 3 && std::wstring(argv[1]) == L"--audit-raw") { RawTrafficAudit(argv[2]); return 0; }
         if (argc == 3 && std::wstring(argv[1]) == L"--audit-raw-capture") { RawTrafficAudit(argv[2], true); return 0; }
-        CounterChecks(); KeyChecks(); LifetimeChecks(); LedgerChecks(); ExactConnectionMatchChecks(); MixedSourceBatchChecks(); TcpProofParserChecks(); TcpSourceChecks(); SchedulerChecks(); return 0;
+        CounterChecks(); KeyChecks(); LifetimeChecks(); LedgerChecks(); ExactConnectionMatchChecks(); MixedSourceBatchChecks(); TcpProofParserChecks(); TcpSourceChecks(); CaptureHealthChecks(); SchedulerChecks(); return 0;
     }
     catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
 }

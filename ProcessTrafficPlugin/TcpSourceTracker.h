@@ -21,13 +21,14 @@ public:
     struct Diagnostics
     {
         Traffic::U64 switches{}, fallbacks{}, rejected{}, overflows{}, gaps{}, estatsRx{}, estatsTx{},
-            suppressedRx{}, suppressedTx{};
-        unsigned active{}, probing{}, uncertain{}, windows{};
+            suppressedRx{}, suppressedTx{}, normalCloses{}, sequenceRejects{}, identityRejects{},
+            incomplete{}, reclaimedWindows{}, staleEvents{}, unclockedEvents{}, quarantinedRx{}, quarantinedTx{};
+        unsigned active{}, probing{}, uncertain{}, windows{}, activeWindows{}, closedWindows{};
     };
     void Reset();
     void SetHealth(bool proofHealthy, ULONG legacyClock, bool legacyHealthy = true);
     void OnProof(const CTcpProofCollector::Event& event);
-    bool KeepLegacy(const Traffic::NetworkEvent& event);
+    bool KeepLegacy(const Traffic::NetworkEvent& event, bool* ambiguous = nullptr);
     void Observe(const CTcpEStatsCollector::Observation& sample);
     std::vector<Slice> TakeSlices();
     void Expire();
@@ -54,18 +55,21 @@ private:
         Direction rx, tx;
         bool connected{}, haveSend{}, haveReceive{}, eligible{ true }, switched{}, haveFin{}, frozen{};
     };
-    struct Window { U64 begin{}, end{}; };
+    struct Window { U64 begin{}, end{}, generation{}; };
     struct Legacy { U64 begin{}, counter{}, tick{}, rx{}, tx{}; bool unmapped{}; };
     static bool Add(std::vector<Span>& spans, U64 left, U64 right, U64& added);
     static bool Position(std::uint32_t sequence, std::uint32_t origin, U64 prefix, U64& position);
     static bool Credit(Direction& direction, U64 left, U64 right, U64& bytes);
     void Emit(Connection& connection, U64 rx, U64 tx, U64 start, U64 end,
         Traffic::Source source, Traffic::Confidence confidence);
-    void Fallback(Connection& connection, U64 utc);
+    void Fallback(Connection& connection, U64 utc, bool incomplete = true);
     void Flush(Connection& connection);
-    void CloseWindows(const Traffic::ConnectionKey& key, U64 counter);
+    void CloseWindows(const Traffic::ConnectionKey& key, U64 counter, U64 generation = 0);
     bool Suppressed(const Traffic::NetworkEvent& event) const;
     bool SameOwner(const Connection& connection, const CTcpEStatsCollector::Observation& sample) const;
+    void ReclaimWindows();
+    void Quarantine(const Traffic::NetworkEvent& event, bool unclocked);
+    bool RetiredKey(const Traffic::ConnectionKey& key, bool remember = false);
 
     std::map<U64, Connection> m_connections;
     std::map<Traffic::ConnectionKey, U64> m_aliases;
@@ -73,6 +77,8 @@ private:
     std::map<Traffic::ConnectionKey, Legacy> m_legacy;
     std::map<std::pair<U64, Traffic::Source>, Slice> m_slices;
     U64 m_generation{};
+    U64 m_legacyWatermark{}, m_proofWatermark{}, m_retiredBefore{};
+    std::array<U64, 1024> m_retiredKeys{};
     unsigned m_windowCount{};
     bool m_healthy{};
     bool m_legacyHealthy{};

@@ -100,8 +100,15 @@ void NativeSourceProbe(const wchar_t* output)
                         {
                             if (entry.second.key.pid != GetCurrentProcessId()) continue;
                             CTcpEStatsCollector::Observation failure;
-                            failure.key = entry.second.key; failure.end = Traffic::FileTimeNow(); failure.error = ERROR_ACCESS_DENIED;
+                            failure.key = entry.second.key; failure.owner = entry.second.owner;
+                            failure.generation = entry.second.estatsGeneration; failure.connectionCreated = entry.second.contextCreated;
+                            LARGE_INTEGER qpc{}; QueryPerformanceCounter(&qpc);
+                            failure.readBeginCounter = failure.readEndCounter = qpc.QuadPart;
+                            failure.end = Traffic::FileTimeNow(); failure.error = ERROR_ACCESS_DENIED;
+                            const auto identities = engine.m_sources.GetDiagnostics().identityRejects;
                             engine.m_sources.Observe(failure);
+                            Check(engine.m_sources.GetDiagnostics().identityRejects == identities,
+                                "Read-failure injection was incorrectly testing an identity mismatch");
                         }
                         engine.DrainSources();
                     }

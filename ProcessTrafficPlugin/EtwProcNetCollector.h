@@ -33,6 +33,7 @@ public:
     std::wstring GetStatusText() const;
     void SetEventSink(EventSink sink, void* context);
     Diagnostics GetDiagnostics() const;
+    bool IsRunning() const { return m_running.load() && m_traceHandle.load() != INVALID_PROCESSTRACE_HANDLE; }
 
 private:
     bool StartTraceSession();

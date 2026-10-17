@@ -124,7 +124,7 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="VerifyReleaseDllSize" AfterTargets="Build" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <Exec Command="powershell.exe -NoProfile -File &quot;$(ProjectDir)..\tools\VerifyReleaseDll.ps1&quot; -Path &quot;$(TargetPath)&quot;" />
+    <Exec Command="powershell.exe -NoProfile -File &quot;$(ProjectDir)VerifyReleaseDll.ps1&quot; -Path &quot;$(TargetPath)&quot;" />
   </Target>
   <ImportGroup Label="ExtensionTargets" />
 </Project>

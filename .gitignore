@@ -26,6 +26,7 @@ obj/
 *.tlog
 *.lastbuildstate
 *.log
+*.map
 
 # Binary outputs
 *.dll

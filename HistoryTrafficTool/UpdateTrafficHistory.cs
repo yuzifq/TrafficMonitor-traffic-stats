@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -13,7 +14,6 @@ public static class TrafficHistoryMigration
     private const int LatestMigrationFormat = 9;
     private const int LatestDictionaryVersion = 4;
     private const int SummaryVersion = 1;
-    private const ulong AbnormalMinuteThreshold = 2UL * 1024UL * 1024UL * 1024UL;
     private const string Base62Digits = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);
     private static readonly Regex DailyName = new Regex(@"^\d{4}-\d{2}-\d{2}\.tsv$", RegexOptions.CultureInvariant);
@@ -61,7 +61,6 @@ public static class TrafficHistoryMigration
         public string FilePath;
         public long InputLines;
         public long OutputLines;
-        public long Removed;
         public SummaryData Summary;
         public ulong Generation;
     }
@@ -81,6 +80,283 @@ public static class TrafficHistoryMigration
         public int Quarters;
     }
 
+    public static int Upgrade(string hostDirectory, bool allowRunning)
+    {
+        hostDirectory = NormalizeDirectory(hostDirectory);
+        ValidateDirectoryPath(hostDirectory);
+        string storage = LayoutChild(hostDirectory, "history");
+        foreach (FileSystemInfo entry in new DirectoryInfo(hostDirectory).GetFileSystemInfos())
+        {
+            if (!entry.Name.Equals("history", StringComparison.OrdinalIgnoreCase)) { continue; }
+            if (!(entry is DirectoryInfo)) { throw new IOException("The history destination is a file, not a directory."); }
+            ValidateDirectoryPath(storage);
+        }
+        List<string> original = GetLayoutEntries(hostDirectory);
+        List<string> relocated = GetLayoutEntries(storage);
+        CheckLayoutConflict(original, relocated);
+        if (original.Count == 0 && relocated.Count == 0)
+        {
+            Console.WriteLine("No plugin data was found. Nothing was moved.");
+            return 0;
+        }
+        if (original.Count != 0) { RequireHostClosed(allowRunning); }
+
+        string lockPath = LayoutChild(hostDirectory, ".traffic_history_update.lock");
+        using (FileStream gate = new FileStream(lockPath, FileMode.OpenOrCreate,
+            FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose))
+        {
+            // Recheck after taking the lock, before conversion or relocation.
+            original = GetLayoutEntries(hostDirectory);
+            relocated = GetLayoutEntries(storage);
+            CheckLayoutConflict(original, relocated);
+            if (original.Count == 0)
+            {
+                if (relocated.Count == 0) { throw new IOException("Plugin data locations changed. Rerun the tool after checking them."); }
+                CaptureLayout(storage, relocated, false);
+                int result = PrepareProcessFormat(storage, allowRunning);
+                Console.WriteLine("Plugin data is already under: " + storage);
+                return result;
+            }
+            RequireHostClosed(allowRunning);
+            CaptureLayout(hostDirectory, original, false);
+            PrepareProcessFormat(hostDirectory, allowRunning);
+            original = GetLayoutEntries(hostDirectory);
+            if (GetLayoutEntries(storage).Count != 0)
+            {
+                throw new IOException("Plugin data appeared in history during the upgrade. No relocation was attempted.");
+            }
+            RequireHostClosed(allowRunning);
+            Console.WriteLine("Checking plugin files before relocation (large histories may take time)...");
+            SortedDictionary<string, string> before = CaptureLayout(hostDirectory, original, true);
+            bool createdStorage = !Directory.Exists(storage);
+            List<string> moved = new List<string>();
+            try
+            {
+                Directory.CreateDirectory(storage);
+                ValidateDirectoryPath(storage);
+                foreach (string name in original)
+                {
+                    RequireHostClosed(allowRunning);
+                    MoveLayoutEntry(hostDirectory, storage, name);
+                    moved.Add(name);
+                }
+                RequireHostClosed(allowRunning);
+                Console.WriteLine("Verifying moved files...");
+                SortedDictionary<string, string> after = CaptureLayout(storage, moved, true);
+                if (before.Count != after.Count) { throw new IOException("Relocation entry count differs from the source."); }
+                foreach (KeyValuePair<string, string> entry in before)
+                {
+                    string value;
+                    if (!after.TryGetValue(entry.Key, out value) || entry.Value != value)
+                    {
+                        throw new IOException("Relocation verification failed: " + entry.Key);
+                    }
+                }
+                List<string> unexpected = GetLayoutEntries(hostDirectory);
+                if (unexpected.Count != 0)
+                {
+                    throw new IOException("Plugin data appeared at the old location during relocation: " +
+                        string.Join(", ", unexpected.ToArray()));
+                }
+            }
+            catch (Exception failure)
+            {
+                List<string> rollbackErrors = new List<string>();
+                if (!allowRunning && Process.GetProcessesByName("TrafficMonitor").Length != 0)
+                {
+                    rollbackErrors.Add("TrafficMonitor restarted; close it before recovering the two locations.");
+                }
+                else
+                {
+                    for (int i = moved.Count - 1; i >= 0; --i)
+                    {
+                        try { MoveLayoutEntry(storage, hostDirectory, moved[i]); }
+                        catch (Exception error) { rollbackErrors.Add(moved[i] + ": " + error.Message); }
+                    }
+                    try
+                    {
+                        if (createdStorage && Directory.Exists(storage))
+                        {
+                            // Nonrecursive deletion refuses any unexpected new contents.
+                            Directory.Delete(storage);
+                        }
+                    }
+                    catch (Exception error)
+                    {
+                        Console.WriteLine("Rollback left the destination directory untouched: " + storage + ". " + error.Message);
+                    }
+                }
+                if (rollbackErrors.Count != 0)
+                {
+                    throw new IOException("Relocation failed. Some entries remain at the paths below; do not overwrite or delete them.\n" +
+                        hostDirectory + "\n" + storage + "\n" + string.Join("\n", rollbackErrors.ToArray()), failure);
+                }
+                throw new IOException("Relocation failed; moved entries were restored to " + hostDirectory +
+                    ". Any completed format conversion and its safety backups remain there. " +
+                    "Check any remaining destination before retrying: " + storage + ". " + failure.Message, failure);
+            }
+            Console.WriteLine("Moved plugin data to: " + storage);
+            Console.WriteLine("Verified all file contents (SHA-256), lengths, last-write times and directory entries.");
+            Console.WriteLine("Migration backups, if present, are now inside the same history directory.");
+            Console.WriteLine("Official history_traffic.dat / history_traffic.dat.bak and host configuration were not moved.");
+            return 0;
+        }
+    }
+
+    private static void RequireHostClosed(bool allowRunning)
+    {
+        if (!allowRunning && Process.GetProcessesByName("TrafficMonitor").Length != 0)
+        {
+            throw new InvalidOperationException("TrafficMonitor is running. Exit it and keep it closed until the upgrade finishes.");
+        }
+    }
+
+    private static int PrepareProcessFormat(string directory, bool allowRunning)
+    {
+        string history = LayoutChild(directory, "app_traffic_history");
+        if (!File.Exists(LayoutChild(directory, "app_traffic_history.tsv")) &&
+            (!Directory.Exists(history) || Directory.GetFileSystemEntries(history).Length == 0))
+        {
+            Console.WriteLine("No process history requires conversion; existing state/adapter files are preserved.");
+            return 0;
+        }
+        return Run(directory, allowRunning);
+    }
+
+    private static void CheckLayoutConflict(List<string> original, List<string> relocated)
+    {
+        if (original.Count != 0 && relocated.Count != 0)
+        {
+            throw new IOException("Plugin data exists in both the TrafficMonitor directory and history. " +
+                "No copies will be merged or overwritten; choose the authoritative location first.\n" +
+                "Old location: " + string.Join(", ", original.ToArray()) + "\n" +
+                "history: " + string.Join(", ", relocated.ToArray()));
+        }
+    }
+
+    private static string LayoutChild(string directory, string name)
+    {
+        if (string.IsNullOrEmpty(name) || name == "." || name == ".." || Path.GetFileName(name) != name)
+        {
+            throw new IOException("Invalid relocation entry name.");
+        }
+        string root = NormalizeDirectory(directory);
+        string child = Path.GetFullPath(Path.Combine(root, name));
+        if (!string.Equals(Path.GetDirectoryName(child), root, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new IOException("Relocation path escapes its expected directory.");
+        }
+        return child;
+    }
+
+    private static string NormalizeDirectory(string directory)
+    {
+        string full = Path.GetFullPath(directory);
+        return full.Length == Path.GetPathRoot(full).Length ? full : full.TrimEnd(Path.DirectorySeparatorChar);
+    }
+
+    private static void ValidateDirectoryPath(string directory)
+    {
+        DirectoryInfo entry = new DirectoryInfo(directory);
+        if (!entry.Exists) { throw new DirectoryNotFoundException(directory); }
+        for (; entry != null; entry = entry.Parent)
+        {
+            if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new IOException("Symbolic links/junctions are not supported for migration: " + entry.FullName);
+            }
+        }
+    }
+
+    private static List<string> GetLayoutEntries(string directory)
+    {
+        List<string> names = new List<string>();
+        if (!Directory.Exists(directory)) { return names; }
+        foreach (FileSystemInfo entry in new DirectoryInfo(directory).GetFileSystemInfos())
+        {
+            string name = entry.Name;
+            bool historyDirectory = name.Equals("app_traffic_history", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("network_traffic_history", StringComparison.OrdinalIgnoreCase);
+            bool stateFile = name.Equals("app_traffic_state.tsv", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("app_traffic_state.tsv.", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("app_traffic_history.tsv", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("app_traffic_history.tsv.", StringComparison.OrdinalIgnoreCase);
+            bool backup = name.StartsWith(".traffic_history_migration_", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith(".traffic_history_failed_", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith(".traffic_history_staging_", StringComparison.OrdinalIgnoreCase);
+            if (!historyDirectory && !stateFile && !backup) { continue; }
+            LayoutChild(directory, name);
+            FileAttributes attributes;
+            try { attributes = File.GetAttributes(entry.FullName); }
+            catch (FileNotFoundException) { continue; }
+            catch (DirectoryNotFoundException) { continue; }
+            if ((attributes & FileAttributes.ReparsePoint) != 0 ||
+                (historyDirectory && !(entry is DirectoryInfo)) || (stateFile && !(entry is FileInfo)))
+            {
+                throw new IOException("Unexpected plugin data entry type: " + entry.FullName);
+            }
+            names.Add(name);
+        }
+        names.Sort(StringComparer.OrdinalIgnoreCase);
+        return names;
+    }
+
+    private static SortedDictionary<string, string> CaptureLayout(string directory, List<string> names, bool hashFiles)
+    {
+        SortedDictionary<string, string> snapshot = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string prefix = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        Stack<FileSystemInfo> pending = new Stack<FileSystemInfo>();
+        foreach (string name in names)
+        {
+            string path = LayoutChild(directory, name);
+            pending.Push(Directory.Exists(path) ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path));
+        }
+        using (SHA256 sha = SHA256.Create())
+        {
+            while (pending.Count != 0)
+            {
+                FileSystemInfo entry = pending.Pop();
+                if (!entry.FullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+                    (entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new IOException("Unsafe plugin data path: " + entry.FullName);
+                }
+                string key = entry.FullName.Substring(prefix.Length);
+                DirectoryInfo folder = entry as DirectoryInfo;
+                if (folder != null)
+                {
+                    snapshot.Add(key, "directory");
+                    foreach (FileSystemInfo child in folder.GetFileSystemInfos()) { pending.Push(child); }
+                }
+                else if (hashFiles)
+                {
+                    using (FileStream input = new FileStream(entry.FullName, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        string hash = Convert.ToBase64String(sha.ComputeHash(input));
+                        entry.Refresh();
+                        snapshot.Add(key, input.Length.ToString(CultureInfo.InvariantCulture) + ":" +
+                            entry.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture) + ":" + hash);
+                    }
+                }
+            }
+        }
+        return snapshot;
+    }
+
+    private static void MoveLayoutEntry(string sourceDirectory, string destinationDirectory, string name)
+    {
+        ValidateDirectoryPath(sourceDirectory);
+        ValidateDirectoryPath(destinationDirectory);
+        string source = LayoutChild(sourceDirectory, name);
+        string destination = LayoutChild(destinationDirectory, name);
+        if (File.Exists(destination) || Directory.Exists(destination))
+        {
+            throw new IOException("Refusing to overwrite relocation destination: " + destination);
+        }
+        if (Directory.Exists(source)) { Directory.Move(source, destination); }
+        else { File.Move(source, destination); }
+    }
+
     public static int Run(string baseDirectory, bool allowRunning)
     {
         baseDirectory = Path.GetFullPath(baseDirectory);
@@ -88,9 +364,9 @@ public static class TrafficHistoryMigration
         string legacySingle = Path.Combine(baseDirectory, "app_traffic_history.tsv");
         string statePath = Path.Combine(baseDirectory, "app_traffic_state.tsv");
 
-        if (IsLatestLayout(historyDirectory, legacySingle, statePath))
+        if (IsCurrentProcessLayout(historyDirectory, legacySingle, statePath))
         {
-            Console.WriteLine("Latest format detected. No adjustment is required.");
+            Console.WriteLine("Compatible dictionary history detected. No format conversion is required.");
             return 0;
         }
         if (!allowRunning && Process.GetProcessesByName("TrafficMonitor").Length != 0)
@@ -100,14 +376,24 @@ public static class TrafficHistoryMigration
 
         bool hasSingle = File.Exists(legacySingle);
         SortedDictionary<DateTime, List<string>> dailySources = FindPublishedDailySources(historyDirectory);
+        string dictionaryPath = Path.Combine(historyDirectory, "apps.tsv");
+        if (File.Exists(dictionaryPath))
+        {
+            throw new InvalidDataException("Dictionary-based history was found, but its format metadata is unsupported/incomplete " +
+                "or mixed with legacy files (history_format=" + ReadStateFormat(statePath, "history_format") +
+                ", history_archive_format=" + ReadStateFormat(statePath, "history_archive_format") +
+                ", dictionary_version=" + ReadStateFormat(dictionaryPath, "version") + "). " +
+                "Keep apps.tsv and app_traffic_state.tsv with their matching history. No conversion or relocation was performed.");
+        }
         if (!hasSingle && dailySources.Count == 0)
         {
-            throw new InvalidDataException("No history generated by a published GitHub version was found.");
+            throw new InvalidDataException("No convertible legacy single/daily history was found at: " + baseDirectory +
+                ". Year/month dictionary history requires apps.tsv and matching state format metadata. Original files were left unchanged.");
         }
-        if (File.Exists(Path.Combine(historyDirectory, "apps.tsv")))
-        {
-            throw new InvalidDataException("An unpublished intermediate application dictionary was found. This tool accepts published GitHub formats and the latest format only.");
-        }
+        foreach (KeyValuePair<DateTime, List<string>> entry in dailySources)
+            if (entry.Value.Count > 1)
+                throw new InvalidDataException("Overlapping daily/old sources for " + entry.Key.ToString("yyyy-MM-dd") +
+                    ". Choose the authoritative copy before migration; automatic summation could duplicate traffic.");
 
         Console.WriteLine("TrafficMonitor directory: " + baseDirectory);
         Console.WriteLine(hasSingle && dailySources.Count != 0
@@ -133,7 +419,6 @@ public static class TrafficHistoryMigration
             List<DayResult> dayResults = new List<DayResult>();
             long inputLines = 0;
             long outputLines = 0;
-            long removedRows = 0;
             ulong allRx = 0;
             ulong allTx = 0;
 
@@ -143,11 +428,10 @@ public static class TrafficHistoryMigration
                 dayResults.Add(result);
                 inputLines += result.InputLines;
                 outputLines += result.OutputLines;
-                removedRows += result.Removed;
                 allRx = AddChecked(allRx, result.Summary.Rx);
                 allTx = AddChecked(allTx, result.Summary.Tx);
-                Console.WriteLine("  {0:yyyy-MM-dd}: {1} -> {2} row(s), removed {3} abnormal row(s)",
-                    result.Date, result.InputLines, result.OutputLines, result.Removed);
+                Console.WriteLine("  {0:yyyy-MM-dd}: {1} -> {2} row(s)",
+                    result.Date, result.InputLines, result.OutputLines);
             }
 
             string splitPath = Path.Combine(stagingDirectory, ".legacy_split");
@@ -176,7 +460,7 @@ public static class TrafficHistoryMigration
             activated = true;
 
             Console.WriteLine("Converted {0} input row(s) to {1} final row(s).", inputLines, outputLines);
-            Console.WriteLine("Removed {0} row(s) whose per-minute application total exceeded 2 GiB.", removedRows);
+            Console.WriteLine("All valid recorded bytes were preserved; no traffic-size threshold was applied.");
             Console.WriteLine("Applications: " + dictionary.ById.Count);
             Console.WriteLine("Summaries: {0} day, {1} week, {2} month, {3} quarter.",
                 summaryCounts.Days, summaryCounts.Weeks, summaryCounts.Months, summaryCounts.Quarters);
@@ -195,18 +479,19 @@ public static class TrafficHistoryMigration
         }
     }
 
-    private static bool IsLatestLayout(string historyDirectory, string legacySingle, string statePath)
+    private static bool IsCurrentProcessLayout(string historyDirectory, string legacySingle, string statePath)
     {
         if (File.Exists(legacySingle) || !Directory.Exists(historyDirectory))
         {
             return false;
         }
         if (ReadStateFormat(statePath, "history_format") != LatestHistoryFormat ||
-            ReadStateFormat(statePath, "history_archive_format") != LatestArchiveFormat ||
-            ReadStateFormat(statePath, "history_migration_format") != LatestMigrationFormat)
+            ReadStateFormat(statePath, "history_archive_format") != LatestArchiveFormat)
         {
             return false;
         }
+        // The migration-tool revision is provenance, not the stored data format.
+        // Native plugin histories legitimately have no history_migration_format.
         string dictionaryPath = Path.Combine(historyDirectory, "apps.tsv");
         if (!File.Exists(dictionaryPath))
         {
@@ -289,11 +574,11 @@ public static class TrafficHistoryMigration
         foreach (KeyValuePair<DateTime, List<string>> entry in source)
         {
             List<string> paths;
-            if (!target.TryGetValue(entry.Key, out paths))
-            {
-                paths = new List<string>();
-                target.Add(entry.Key, paths);
-            }
+            if (target.TryGetValue(entry.Key, out paths))
+                throw new InvalidDataException("Overlapping single-file and daily history for " + entry.Key.ToString("yyyy-MM-dd") +
+                    ". Choose the authoritative source before migration; original files were left unchanged.");
+            paths = new List<string>();
+            target.Add(entry.Key, paths);
             paths.AddRange(entry.Value);
             paths.Sort(StringComparer.OrdinalIgnoreCase);
         }
@@ -445,7 +730,6 @@ public static class TrafficHistoryMigration
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
         SummaryData summary = new SummaryData();
         long outputLines = 0;
-        long removed = 0;
         using (StreamWriter writer = OpenWriter(outputPath))
         {
             foreach (KeyValuePair<int, Dictionary<string, Amount>> minuteEntry in minutes)
@@ -456,11 +740,6 @@ public static class TrafficHistoryMigration
                 foreach (string name in names)
                 {
                     Amount amount = minuteEntry.Value[name];
-                    if (IsAbnormal(amount.Rx, amount.Tx))
-                    {
-                        removed++;
-                        continue;
-                    }
                     ulong id = dictionary.GetOrAdd(name);
                     writer.Write(first ? FormatMinute(minuteEntry.Key) : string.Empty);
                     writer.Write('\t');
@@ -482,7 +761,6 @@ public static class TrafficHistoryMigration
             FilePath = outputPath,
             InputLines = inputLines,
             OutputLines = outputLines,
-            Removed = removed,
             Summary = summary,
             Generation = unchecked((ulong)file.Length ^ (ulong)file.LastWriteTimeUtc.Ticks)
         };
@@ -598,11 +876,6 @@ public static class TrafficHistoryMigration
             throw new OverflowException("Traffic total exceeds UInt64.");
         }
         return left + right;
-    }
-
-    private static bool IsAbnormal(ulong rx, ulong tx)
-    {
-        return rx > AbnormalMinuteThreshold || tx > AbnormalMinuteThreshold - rx;
     }
 
     private static string ToBase62(ulong value)
@@ -870,7 +1143,8 @@ public static class TrafficHistoryMigration
         ulong allTx)
     {
         string backupPath = Path.Combine(baseDirectory,
-            ".traffic_history_migration_" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture));
+            ".traffic_history_migration_" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) +
+            "-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(backupPath);
         string backupHistory = Path.Combine(backupPath, "app_traffic_history");
         string backupSingle = Path.Combine(backupPath, "app_traffic_history.tsv");

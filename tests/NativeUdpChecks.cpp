@@ -12,7 +12,9 @@ void NativeUdpProbe(const wchar_t* output)
             NativeCollector etw(GetCurrentProcessId(), 17);
             etw.m_includeLoopback = true;
             etw.Start(); Sleep(1200);
-            Check(etw.m_running.load(), "UDP ETW consumer did not start");
+            const auto readyDeadline = GetTickCount64() + 10000;
+            while (etw.m_running && etw.m_traceHandle == INVALID_PROCESSTRACE_HANDLE && GetTickCount64() < readyDeadline) Sleep(50);
+            Check(etw.m_running && etw.m_traceHandle != INVALID_PROCESSTRACE_HANDLE, "UDP ETW consumer did not become ready");
             SocketGuard server, client;
             server.value = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
             client.value = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -23,6 +25,7 @@ void NativeUdpProbe(const wchar_t* output)
             Check(bind(server.value, reinterpret_cast<sockaddr*>(&address), length) == 0, "UDP bind failed");
             Check(getsockname(server.value, reinterpret_cast<sockaddr*>(&address), &length) == 0, "UDP getsockname failed");
             Check(connect(client.value, reinterpret_cast<sockaddr*>(&address), length) == 0, "UDP connect failed");
+            etw.SetProbePort(AddressPort(address, ipv6));
             std::array<char, 16384> data{}, received{};
             Traffic::U64 expected{};
             unsigned packets{};
@@ -34,11 +37,21 @@ void NativeUdpProbe(const wchar_t* output)
                     expected += size; ++packets;
                 }
             Sleep(2200);
+            const auto waitBegin = GetTickCount64(), deadline = waitBegin + 8000;
+            while (GetTickCount64() < deadline)
+            {
+                const auto delivered = etw.GetProcessTrafficSnapshot()[GetCurrentProcessId()];
+                if (delivered.rxTotalBytes >= expected && delivered.txTotalBytes >= expected) break;
+                Sleep(100);
+            }
             const auto total = etw.GetProcessTrafficSnapshot()[GetCurrentProcessId()];
             const auto d = etw.GetDiagnostics();
             out << "UDP" << (ipv6 ? "6" : "4") << "\tpackets\t" << packets << "\tknownPayload\t" << expected
                 << "\tETWRx\t" << total.rxTotalBytes << "\tETWTx\t" << total.txTotalBytes
-                << "\tparseFailures\t" << d.parseFailures << "\teventsLost\t" << d.eventsLost << '\n' << std::flush;
+                << "\tparseFailures\t" << d.parseFailures << "\teventsLost\t" << d.eventsLost
+                << "\taccepted\t" << d.accepted << "\tendpointFailures\t" << d.endpointFailures
+                << "\tqueryError\t" << d.queryError << "\tcallbackWaitMs\t" << GetTickCount64() - waitBegin << '\n' << std::flush;
+            etw.ReportTrace(out); etw.ReportRejected(out);
             etw.Stop();
             Check(total.rxTotalBytes == expected && total.txTotalBytes == expected,
                 "UDP ETW reported bytes differ from the verified payload; inspect protocol semantics");

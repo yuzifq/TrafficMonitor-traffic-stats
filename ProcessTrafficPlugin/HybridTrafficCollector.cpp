@@ -45,6 +45,7 @@ bool CHybridTrafficCollector::Start()
         m_lastPublish = Traffic::FileTimeNow();
         m_lastPublishTick = GetTickCount64();
         m_diagnostics.running = true;
+        m_captureIncomplete = true;
         m_sources.Reset();
     }
     m_etw.Start();
@@ -114,7 +115,14 @@ void CHybridTrafficCollector::OnEvent(const Traffic::NetworkEvent& event)
 {
     if ((!event.bytes && !event.lifecycle) || event.retransmit || event.preStart) return;
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (!m_sources.KeepLegacy(event)) return;
+    (event.send ? m_diagnostics.rawTx : m_diagnostics.rawRx) += event.bytes;
+    bool ambiguous{};
+    if (!m_sources.KeepLegacy(event, &ambiguous))
+    {
+        if (ambiguous)
+            RecordUnknown(event.timestamp, event.timestamp, Traffic::Confidence::Unknown);
+        return;
+    }
     auto key = event.key;
     if (m_raw.size() >= 16384 && m_raw.find(key) == m_raw.end())
     {
@@ -207,7 +215,7 @@ void CHybridTrafficCollector::ProcessRaw(std::map<Traffic::ConnectionKey, Raw>& 
         delta.path = flow.owner.path;
         delta.rx = value.rx; delta.tx = value.tx;
         delta.start = value.first; delta.end = value.end;
-        if (m_diagnostics.etw.eventsLost || m_diagnostics.etw.realtimeBuffersLost || m_diagnostics.etw.sessionResets)
+        if (m_captureIncomplete)
             delta.confidence = Traffic::Confidence::Incomplete;
         if (!flow.owner.created || flow.owner.path.empty() || value.mixedInstances || !key.pid)
         {
@@ -225,8 +233,40 @@ void CHybridTrafficCollector::ProcessRaw(std::map<Traffic::ConnectionKey, Raw>& 
     }
 }
 
+void CHybridTrafficCollector::RecordUnknown(U64 start, U64 end, Traffic::Confidence confidence)
+{
+    Delta marker;
+    marker.identity = L"unknown:0:0:0"; marker.name = L"PID0";
+    marker.start = (std::min)(start, end); marker.end = (std::max)(start, end);
+    marker.confidence = confidence;
+    Accumulate(marker);
+}
+
+void CHybridTrafficCollector::RecordCaptureHealth(const CEtwProcNetCollector::Diagnostics& current, U64 now, bool running)
+{
+    const auto& previous = m_diagnostics.etw;
+    const bool incomplete = !running || current.queryError || (current.clockType != 1 && current.clockType != 2) ||
+        current.eventsLost != previous.eventsLost || current.realtimeBuffersLost != previous.realtimeBuffersLost ||
+        current.sessionResets != previous.sessionResets || current.parseFailures != previous.parseFailures ||
+        current.endpointFailures != previous.endpointFailures;
+    // Native counters bracket an observation interval, not a known missing byte
+    // amount. Retain recovery/startup uncertainty even when no data arrived.
+    if (incomplete || m_captureIncomplete)
+    {
+        ++m_diagnostics.captureUncertainIntervals;
+        RecordUnknown(m_lastPublish, now, Traffic::Confidence::Incomplete);
+    }
+    m_captureIncomplete = incomplete;
+    m_diagnostics.etw = current;
+}
+
 void CHybridTrafficCollector::Accumulate(const Delta& delta)
 {
+    m_diagnostics.formalRx += delta.rx; m_diagnostics.formalTx += delta.tx;
+    if (delta.source == Traffic::Source::Etw)
+    {
+        m_diagnostics.etwFormalRx += delta.rx; m_diagnostics.etwFormalTx += delta.tx;
+    }
     const LedgerKey key{ delta.identity, delta.source };
     auto& current = m_current[delta.identity];
     Merge(static_cast<Delta&>(current), delta);
@@ -299,7 +339,7 @@ void CHybridTrafficCollector::Run()
             DrainSources();
             if (sample)
             {
-                m_diagnostics.etw = etw;
+                RecordCaptureHealth(etw, now, m_etw.IsRunning());
                 m_diagnostics.estats = m_estats.GetDiagnostics();
                 m_diagnostics.proof = proof;
                 Publish(now);

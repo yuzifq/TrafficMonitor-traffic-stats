@@ -1469,6 +1469,7 @@ void CHistoryTrafficStore::Initialize(const std::wstring& base_dir)
     m_hasPersistedAllTime = false;
     m_checkpointDirty = m_stateDirty = false;
     m_writeHealthy = true;
+    m_currentDayHealthy = m_rangeHealthy = m_historyReadHealthy = true;
     m_engine = m_currentEngine = {};
     InvalidateCaches();
 }
@@ -1678,6 +1679,7 @@ CHistoryTrafficStore::EngineMetadata CHistoryTrafficStore::GetEngineMetadata(con
         result.corrupt |= m_currentEngine.corrupt;
     }
     for (const auto& app : GetRangeAppTotals(range)) if (app.identity.empty()) { result.legacy = true; break; }
+    result.corrupt |= !m_rangeHealthy;
     result.minutes = minutes.size();
     return result;
 }
@@ -1685,7 +1687,7 @@ CHistoryTrafficStore::EngineMetadata CHistoryTrafficStore::GetEngineMetadata(con
 std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeAppTotals(const DateTimeRange& range) const
 {
     const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
-    if (!m_loaded) return {};
+    if (!m_loaded) { m_rangeHealthy = false; return {}; }
     const auto normalized = NormalizeRange(range);
     if (m_rangeCacheValid && IsSameRange(m_cachedRange, normalized))
     {
@@ -1693,6 +1695,7 @@ std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeA
     }
 
     std::unordered_map<std::wstring, TrafficAmount> totals_by_app;
+    m_rangeHealthy = true;
     SYSTEMTIME today{};
     GetLocalTime(&today);
     SYSTEMTIME cursor = normalized.start;
@@ -1750,6 +1753,7 @@ std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeA
         if (IsCurrentDate(cursor))
         {
             add_current_day();
+            m_rangeHealthy &= m_currentDayHealthy;
             break;
         }
 
@@ -1860,8 +1864,9 @@ std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeA
                 (FormatDateKey(cursor).substr(0, 7) + L".tmh");
             if (std::filesystem::exists(tmh_path))
             {
-                AddTmhRangeTotals(tmh_path, day_range.start, day_range.end, totals_by_app);
+                if (!AddTmhRangeTotals(tmh_path, day_range.start, day_range.end, totals_by_app)) m_rangeHealthy = false;
             }
+            else if (std::filesystem::exists(day_path)) m_rangeHealthy = false;
         }
         AddDays(cursor, 1);
     }
@@ -1889,6 +1894,7 @@ std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeA
         result.push_back(item);
     }
     m_cachedRange = normalized;
+    m_historyReadHealthy &= m_rangeHealthy;
     m_cachedRangeApps = result;
     m_cachedRangeTotal = total;
     m_rangeCacheValid = true;
@@ -2223,6 +2229,31 @@ void CHistoryTrafficStore::SetPreferredLanguage(DisplayLanguage language)
     SaveState();
 }
 
+bool CHistoryTrafficStore::RequiresAppDictionary() const
+{
+    std::error_code error;
+    if (std::filesystem::exists(m_appDictionaryPath, error) || error) return true;
+    if (!std::filesystem::exists(m_historyDir, error)) return static_cast<bool>(error);
+    for (auto it = std::filesystem::recursive_directory_iterator(m_historyDir, error);
+        !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
+    {
+        if (!it->is_regular_file(error)) continue;
+        const auto name = it->path().filename().wstring();
+        const auto extension = it->path().extension();
+        if (extension == L".tmh" || name == L"append.pending") return true;
+        if (name.find(L".quality.tsv") != std::wstring::npos) continue;
+        if (extension != L".tsv" && name != L"current.tmp") continue;
+        SYSTEMTIME date{};
+        if (TryParseDateKey(it->path().stem().wstring(), date) && it->file_size(error)) return true;
+        std::ifstream input(it->path(), std::ios::binary);
+        std::wstring line;
+        while (ReadUtf8Line(input, line))
+            if (line.rfind(L"entry\t", 0) == 0 || line.rfind(L"app\t", 0) == 0) return true;
+        if (!input.eof()) return true;
+    }
+    return static_cast<bool>(error);
+}
+
 void CHistoryTrafficStore::EnsureLoaded()
 {
     if (m_loaded)
@@ -2232,18 +2263,16 @@ void CHistoryTrafficStore::EnsureLoaded()
 
     if (m_baseDir.empty())
     {
-        wchar_t module_path[MAX_PATH]{};
-        GetModuleFileNameW(nullptr, module_path, MAX_PATH);
-        m_baseDir = std::filesystem::path(module_path).parent_path().wstring();
-        m_historyDir = (std::filesystem::path(m_baseDir) / L"app_traffic_history").wstring();
-        m_appDictionaryPath = (std::filesystem::path(m_historyDir) / L"apps.tsv").wstring();
-        m_stateFilePath = (std::filesystem::path(m_baseDir) / L"app_traffic_state.tsv").wstring();
-        m_checkpointFilePath = (std::filesystem::path(m_historyDir) / L"current.tmp").wstring();
-        m_checkpointCommitPath = (std::filesystem::path(m_historyDir) / L"current.commit").wstring();
+        Initialize(Utils::GetHistoryDirectory());
     }
 
     LoadState();
-    LoadAppDictionary();
+    if (!LoadAppDictionary() && RequiresAppDictionary())
+    {
+        m_writeHealthy = m_historyReadHealthy = m_rangeHealthy = false;
+        return;
+    }
+    m_historyReadHealthy = m_writeHealthy = true;
     if (!RecoverAppend()) { m_writeHealthy = false; return; }
     EnsureCompletedSummaries();
     Load();
@@ -2556,6 +2585,7 @@ void CHistoryTrafficStore::Load()
     m_bucketTimeRangeByKey.clear();
     InvalidateRangeCache();
     TrafficAmount loaded_total{};
+    m_currentDayHealthy = true;
     SYSTEMTIME today{};
     GetLocalTime(&today);
     LoadHistoryFile(DailyHistoryPath(m_historyDir, today).wstring(), loaded_total);
@@ -2649,6 +2679,7 @@ CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::CalculateStoredHistory
                 if (!TryReadTmhMetadata(file_entry.path(), metadata) ||
                     metadata.year != year || metadata.month != month)
                 {
+                    m_historyReadHealthy = false;
                     continue;
                 }
                 for (const auto& day : metadata.days)
@@ -2691,6 +2722,7 @@ CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::CalculateStoredHistory
                 std::ifstream input(file_entry.path(), std::ios::binary);
                 if (!input.is_open())
                 {
+                    m_historyReadHealthy = false;
                     continue;
                 }
                 TrafficAmount day_total{};
@@ -2699,6 +2731,7 @@ CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::CalculateStoredHistory
                 std::wstring current_time_key;
                 while (ReadUtf8Line(input, line))
                 {
+                    if (line.empty()) continue;
                     std::wstring bucket_key;
                     std::wstring app_name;
                     TrafficAmount amount{};
@@ -2720,6 +2753,7 @@ CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::CalculateStoredHistory
                 {
                     AddAmount(total, day_total);
                 }
+                else m_historyReadHealthy = false;
             }
         }
     }
@@ -2874,12 +2908,14 @@ void CHistoryTrafficStore::LoadHistoryFile(const std::wstring& path, TrafficAmou
     std::wstring current_time_key;
     while (ReadUtf8Line(input, line))
     {
+        if (line.empty()) continue;
         std::wstring bucket_key;
         std::wstring app_name;
         TrafficAmount amount{};
         if (!TryReadDailyHistoryLine(date_key, line, m_appNameById, current_time_key, bucket_key, app_name, amount) ||
             !EnsureBucketTimeRange(bucket_key))
         {
+            m_currentDayHealthy = false;
             continue;
         }
 
@@ -2887,6 +2923,8 @@ void CHistoryTrafficStore::LoadHistoryFile(const std::wstring& path, TrafficAmou
         AddAmount(entry, amount);
         AddAmount(loaded_total, amount);
     }
+    m_currentDayHealthy &= input.eof();
+    m_historyReadHealthy &= m_currentDayHealthy;
 }
 
 bool CHistoryTrafficStore::AddMinuteFileTotals(
@@ -2917,8 +2955,10 @@ bool CHistoryTrafficStore::AddMinuteFileTotals(
 
     std::wstring line;
     std::wstring current_time_key;
+    std::unordered_map<std::wstring, TrafficAmount> file_totals;
     while (ReadUtf8Line(input, line))
     {
+        if (line.empty()) continue;
         std::wstring bucket_key;
         std::wstring app_name;
         TrafficAmount amount{};
@@ -2936,9 +2976,11 @@ bool CHistoryTrafficStore::AddMinuteFileTotals(
         {
             continue;
         }
-        AddAmount(totals_by_app[app_name], amount);
+        AddAmount(file_totals[app_name], amount);
     }
-    return input.eof();
+    if (!input.eof()) return false;
+    for (const auto& entry : file_totals) AddAmount(totals_by_app[entry.first], entry.second);
+    return true;
 }
 
 bool CHistoryTrafficStore::AppendHistoryEntries(
@@ -3515,7 +3557,7 @@ bool CHistoryTrafficStore::SaveState() const
     {
         WriteUtf8StateLine(output, L"history_migration_format", m_historyMigrationFormat);
     }
-    if (m_allTimeRecoveryFormat > 0)
+    if (m_allTimeRecoveryFormat > 0 && m_historyReadHealthy)
     {
         WriteUtf8StateLine(output, L"all_time_recovery_format", m_allTimeRecoveryFormat);
     }

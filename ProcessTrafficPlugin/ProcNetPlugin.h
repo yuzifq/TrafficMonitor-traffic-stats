@@ -35,6 +35,12 @@ public:
         std::wstring identity;
     };
 
+    struct TotalsSummary
+    {
+        CHistoryTrafficStore::TrafficAmount networkRange, networkAll, processRange, processAll;
+        bool networkAvailable{}, processAvailable{}, processAllAvailable{};
+    };
+
     static CProcNetPlugin& Instance();
 
     int GetAPIVersion() const override;
@@ -49,7 +55,8 @@ public:
 
     std::vector<AppTrafficEntry> BuildAllApps() const;
     std::vector<AppTrafficEntry> BuildHistoryApps(const CHistoryTrafficStore::DateTimeRange& range) const;
-    std::wstring BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range, CHistoryTrafficStore::DisplayLanguage language) const;
+    std::wstring BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range,
+        CHistoryTrafficStore::DisplayLanguage language, TotalsSummary* summary = nullptr) const;
     std::wstring BuildLiveNetworkText(CHistoryTrafficStore::DisplayLanguage language) const;
     CNetworkTrafficCollector::Snapshot GetNetworkSnapshot() const;
     bool SetNetworkAdapter(const std::wstring& id);
@@ -89,9 +96,9 @@ private:
     CNetworkTrafficStore m_networkStore;
     mutable std::mutex m_historyMutex;
     std::wstring m_tooltip;
-    std::wstring m_configDir;
     bool m_collectorStarted;
     bool m_historyInitialized;
     std::uint64_t m_lastHistorySampleSequence{};
+    std::uint64_t m_historyWriteFailures{};
     std::unique_ptr<CTrafficDetailWindow> m_detailWindow;
 };

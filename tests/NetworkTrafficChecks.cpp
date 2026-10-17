@@ -5,6 +5,7 @@
 
 #include "../ProcessTrafficPlugin/NetworkTrafficStore.h"
 #include "../ProcessTrafficPlugin/PluginInterface.h"
+#include "../ProcessTrafficPlugin/Utils.h"
 
 #include <fstream>
 #include <iostream>
@@ -174,6 +175,14 @@ void CheckStore(const std::filesystem::path& fixture)
         "Export lost actual time intervals or adapter identity");
     Check(!partial.ExportRange(local_range, day.wstring(), error), "Export overwrote managed network history");
     Check(partial.IsManagedPath((fixture / L"app_traffic_history" / L"apps.tsv").wstring()), "Process history is not protected");
+    Store relocated;
+    relocated.Initialize((fixture / L"history").wstring());
+    Check(relocated.IsManagedPath((fixture / L"history_traffic.dat").wstring()) &&
+        relocated.IsManagedPath((fixture / L"history_traffic.dat.bak").wstring()) &&
+        relocated.IsManagedPath((fixture / L"app_traffic_state.tsv").wstring()) &&
+        relocated.IsManagedPath((fixture / L"history/app_traffic_state.tsv.tmp").wstring()) &&
+        !relocated.IsManagedPath((fixture / L"export.tsv").wstring()),
+        "Relocated storage lost managed/official export protection or blocked ordinary exports");
     const auto corrupt_fixture = fixture / L"corrupt-checkpoint";
     Store corrupt;
     corrupt.Initialize(corrupt_fixture.wstring());
@@ -299,13 +308,16 @@ void LiveCheck()
     }
 }
 
-void CheckDll(const wchar_t* dll_path)
+void CheckDll(const wchar_t* dll_path, bool collect = true)
 {
     const auto fixture = std::filesystem::absolute(std::filesystem::path(L"build") /
         (L"dll-checks-" + std::to_wstring(GetTickCount64())));
     std::filesystem::create_directories(fixture);
     const auto official = fixture / L"history_traffic.dat";
     Write(official, "host history sentinel\n");
+    const auto storage = std::filesystem::path(Utils::GetHistoryDirectory());
+    const auto host_directory = storage.parent_path();
+    const auto root_state = Read(host_directory / L"app_traffic_state.tsv");
     class Host final : public ITrafficMonitor
     {
     public:
@@ -330,15 +342,28 @@ void CheckDll(const wchar_t* dll_path)
     Check(entry != nullptr, "Plugin entry export is missing");
     auto* plugin = entry();
     Check(plugin && plugin->GetAPIVersion() == 7, "Plugin API changed");
+    // Hosts may ask for names/language before supplying their config directory.
+    Check(plugin->GetInfo(ITMPlugin::TMI_NAME) != nullptr, "Early plugin metadata failed");
     plugin->OnInitialize(&host);
     plugin->OnExtenedInfo(ITMPlugin::EI_CONFIG_DIR, host.directory.c_str());
-    Check(std::wstring(plugin->GetInfo(ITMPlugin::TMI_VERSION)) == L"1.1.4", "Plugin version changed unexpectedly");
+    Check(std::filesystem::exists(storage / L"app_traffic_state.tsv") &&
+        std::filesystem::exists(storage / L"network_traffic_history") &&
+        !std::filesystem::exists(fixture / L"app_traffic_state.tsv") &&
+        !std::filesystem::exists(fixture / L"network_traffic_history") &&
+        Read(host_directory / L"app_traffic_state.tsv") == root_state,
+        "Early metadata or late config selected storage outside host/history");
+    Check(std::wstring(plugin->GetInfo(ITMPlugin::TMI_VERSION)) == L"1.2.0", "Plugin version is not 1.2.0");
     Check(plugin->GetItem(0) && plugin->GetItem(9) && !plugin->GetItem(10), "Process ranking items changed");
+    if (!collect)
+    {
+        std::cout << "PASS: actual Release DLL load, API 7, version, ranking, early metadata and late config use host/history without starting collectors\n";
+        return;
+    }
     plugin->DataRequired();
     Sleep(1000);
     plugin->DataRequired();
     Check(host.reads == 0 && Read(official) == "host history sentinel\n", "Plugin reused official statistics");
-    const auto checkpoint = Read(fixture / L"network_traffic_history" / L"pending.tsv");
+    const auto checkpoint = Read(storage / L"network_traffic_history" / L"pending.tsv");
     Check(checkpoint.find("network\t1\n") == 0 && checkpoint.size() > 10, "Release DLL did not persist an independent sample");
     // The host owns plugin lifetime. Keep the module loaded until this smoke-test process exits.
     std::cout << "PASS: actual Release DLL load, API 7, version, ranking items, independent host callbacks and persisted network sample\n";
@@ -351,6 +376,7 @@ int wmain(int argc, wchar_t** argv)
     {
         if (argc == 2 && std::wstring(argv[1]) == L"--live") { LiveCheck(); return 0; }
         if (argc == 3 && std::wstring(argv[1]) == L"--dll") { CheckDll(argv[2]); return 0; }
+        if (argc == 3 && std::wstring(argv[1]) == L"--dll-load") { CheckDll(argv[2], false); return 0; }
         const auto fixture = std::filesystem::absolute(std::filesystem::path(L"build") /
             (L"network-checks-" + std::to_wstring(GetTickCount64())) / L"\u4e2d\u6587");
         CheckCollector();

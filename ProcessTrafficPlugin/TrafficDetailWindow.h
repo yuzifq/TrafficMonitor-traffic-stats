@@ -44,6 +44,10 @@ private:
     void ToggleView();
     void ToggleRefreshPaused();
     void ExportSelectedRange();
+    void ShowDetails();
+    void ShowText(const std::wstring& text, const wchar_t* title);
+    std::wstring BuildDetailsText() const;
+    void UpdateSummaryContent() const;
     void ApplyLanguageTexts();
     void RefreshAdapterChoices();
     void UpdateFollowRange();
@@ -72,6 +76,7 @@ private:
     HICON LoadDefaultExeIcon() const;
     void ApplyRangeControls();
     void ResizeChildren(int width, int height);
+    int GetSummaryHeight() const;
     void LayoutTopControls(int width);
     void LayoutBottomControls(int width, int height);
     void LayoutListControl(int width, int height);
@@ -94,6 +99,8 @@ private:
     LRESULT HandleMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
 
     static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
+    static LRESULT CALLBACK SummarySubclassProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param,
+        UINT_PTR subclass_id, DWORD_PTR reference);
 
 private:
     CProcNetPlugin& m_plugin;
@@ -111,17 +118,21 @@ private:
     HWND m_endTimePicker;
     HWND m_hidePidCheck;
     HWND m_exportButton;
+    HWND m_detailsButton{};
     HWND m_dayRangeButton;
     HWND m_weekRangeButton;
     HWND m_monthRangeButton;
     HWND m_yearRangeButton;
     HWND m_summary;
+    HWND m_summaryContent{};
     HWND m_adapterLabel{};
     HWND m_adapterCombo{};
     HWND m_followRangeCheck{};
     HWND m_diagnosticsButton{};
     HFONT m_font{};
     int m_lineHeight{ 13 };
+    CProcNetPlugin::TotalsSummary m_totals{};
+    std::wstring m_summaryText;
     std::vector<std::wstring> m_adapterIds;
     std::vector<std::wstring> m_adapterLabels;
     int m_followQuickRangeId{};

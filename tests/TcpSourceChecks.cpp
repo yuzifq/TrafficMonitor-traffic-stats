@@ -204,8 +204,26 @@ void TcpSourceChecks()
     }
     {
         SourceFixture f;
+        f.Activate();
+        f.Proof(CTcpProofCollector::Kind::Connect, 1000, 0, 0, 2);
+        f.Proof(CTcpProofCollector::Kind::Syn, 1010, f.txOrigin - 1, 0, 2);
+        f.Proof(CTcpProofCollector::Kind::Receive, 1020, f.rxOrigin, 1, 2);
+        f.Proof(CTcpProofCollector::Kind::Established, 1030, 0, 0, 2);
+        f.Legacy(false, 1040, 0, true);
+        f.tracker.Observe(f.Sample(1200, 0, 0, true)); f.tracker.Observe(f.Sample(1400));
+        Check(f.tracker.GetDiagnostics().active == 1 && f.tracker.GetDiagnostics().switches == 2,
+            "Second TCB generation did not qualify for the reused tuple");
+        const auto activeKey = f.key;
+        f.key.remotePort++;
+        f.Proof(CTcpProofCollector::Kind::Connect, 2000);
+        f.key = activeKey;
+        Check(!f.Legacy(true, 2100, 11) && f.tracker.m_windows.at(f.key).back().end == 0,
+            "Old TCB reuse closed another generation's active suppression window");
+    }
+    {
+        SourceFixture f;
         f.Proof(CTcpProofCollector::Kind::Send, 150, f.txOrigin + 0x80000000u, 100);
-        Check(f.tracker.GetDiagnostics().overflows == 1 && !f.tracker.GetDiagnostics().switches &&
+        Check(f.tracker.GetDiagnostics().sequenceRejects == 1 && !f.tracker.GetDiagnostics().overflows && !f.tracker.GetDiagnostics().switches &&
             f.Legacy(true, 200, 4096) && !f.tracker.GetDiagnostics().suppressedTx,
             "Pre-handoff sequence rejection unexpectedly consumed the legacy byte source");
     }
@@ -216,11 +234,161 @@ void TcpSourceChecks()
         const auto d = f.tracker.GetDiagnostics();
         Traffic::U64 bytes{};
         for (const auto& slice : f.tracker.TakeSlices()) bytes += slice.rx + slice.tx;
-        Check(d.fallbacks == 1 && d.gaps == 1 && !bytes,
-            "Idle normal close no longer matches the documented diagnostic counter interpretation");
+        Check(d.normalCloses == 1 && !d.fallbacks && !d.gaps && !d.incomplete && d.closedWindows == 1 && !bytes,
+            "Idle normal close was mislabeled as failure, fallback or missing coverage");
+    }
+    {
+        SourceFixture f;
+        Traffic::NetworkEvent partial;
+        partial.key = f.key; partial.bytes = 19; partial.rawTimestamp = 500; partial.clockType = 1;
+        Check(f.tracker.KeepLegacy(partial), "Legacy-only partial endpoints lost their original ETW source");
+        f.Activate();
+        bool ambiguous{};
+        Check(!f.tracker.KeepLegacy(partial, &ambiguous) && ambiguous &&
+            f.tracker.GetDiagnostics().quarantinedRx == 19,
+            "Missing ports bypassed an active TCP handoff guard");
+        f.Proof(CTcpProofCollector::Kind::Close, 700);
+        f.Proof(CTcpProofCollector::Kind::State, 800); f.Legacy(false, 800, 0);
+        f.tracker.Expire(); partial.rawTimestamp = 900;
+        Check(!f.tracker.GetDiagnostics().windows && !f.tracker.KeepLegacy(partial, &ambiguous) && ambiguous,
+            "Missing endpoints reopened a retired TCP source without identity proof");
+        partial.key.protocol = 17;
+        Check(f.tracker.KeepLegacy(partial), "TCP ambiguity protection changed the UDP source");
+    }
+    {
+        SourceFixture f;
+        f.Activate();
+        f.Proof(CTcpProofCollector::Kind::Close, 700);
+        Check(!f.Legacy(true, 600, 50), "Late bytes escaped a closed, retained window");
+        Check(!f.Legacy(true, 710, 9), "A post-close timestamp reopened the old source without a new lifetime");
+        f.Proof(CTcpProofCollector::Kind::State, 800);
+        f.Legacy(false, 800, 0);
+        f.tracker.Expire();
+        auto d = f.tracker.GetDiagnostics();
+        Check(!d.windows && !f.tracker.m_windowCount && d.reclaimedWindows == 1,
+            "Closed window did not retire after both stream boundaries advanced");
+        Check(!f.Legacy(true, 600, 50) && f.tracker.GetDiagnostics().quarantinedTx == 59,
+            "An arbitrarily late callback replayed a retired window");
+        Check(!f.Legacy(true, 950, 4), "An old closed key reopened after retirement without a new Connect");
+        Traffic::NetworkEvent untimed;
+        untimed.key = f.key; untimed.hasEndpoints = true; untimed.bytes = 12;
+        Check(!f.tracker.KeepLegacy(untimed), "An unclocked callback bypassed a retired key guard");
+        untimed.key.pid = 777; untimed.key.localPort = 999;
+        Check(f.tracker.KeepLegacy(untimed), "An old window indefinitely suppressed an unrelated unclocked lifetime");
+        f.tracker.TakeSlices();
+        f.Proof(CTcpProofCollector::Kind::Connect, 1000);
+        f.Proof(CTcpProofCollector::Kind::Syn, 1010, f.txOrigin - 1);
+        f.Proof(CTcpProofCollector::Kind::Receive, 1020, f.rxOrigin, 1);
+        f.Proof(CTcpProofCollector::Kind::Established, 1030);
+        Check(f.Legacy(false, 1040, 0, true) && f.Legacy(true, 1050, 11),
+            "A retired generation suppressed unrelated bytes in a new lifetime");
+        Check(!f.Legacy(true, 950, 17), "A late old lifetime entered the newly opened legacy prefix");
+        // A late connect for another tuple must not evict a reused TCB.
+        f.key.remotePort++;
+        f.Proof(CTcpProofCollector::Kind::Connect, 900);
+        Check(f.tracker.m_connections.at(1).begin == 1000, "Old cross-tuple connect evicted a new TCB generation");
+    }
+    {
+        SourceFixture f;
+        for (unsigned i = 0; i < 5100; ++i)
+        {
+            const Traffic::U64 base = 100 + i * 1000ULL;
+            if (i)
+            {
+                f.key.localPort = static_cast<std::uint16_t>(100 + i);
+                f.Proof(CTcpProofCollector::Kind::Connect, base);
+                f.Proof(CTcpProofCollector::Kind::Syn, base + 10, f.txOrigin - 1);
+                f.Proof(CTcpProofCollector::Kind::Receive, base + 20, f.rxOrigin, 1);
+                f.Proof(CTcpProofCollector::Kind::Established, base + 30);
+                f.Legacy(false, base + 40, 0, true);
+            }
+            f.tracker.Observe(f.Sample(base + 100, 0, 0, true));
+            f.tracker.Observe(f.Sample(base + 300));
+            Check(f.tracker.GetDiagnostics().active == 1, "Historical window capacity blocked a later valid switch");
+            f.tracker.Observe(f.Sample(base + 400, 7, 9));
+            Traffic::U64 rx{}, tx{};
+            for (const auto& slice : f.tracker.TakeSlices()) { rx += slice.rx; tx += slice.tx; }
+            Check(rx == 7 && tx == 9, "Repeated switch changed exact formal increments");
+            f.Proof(CTcpProofCollector::Kind::Close, base + 500);
+            f.Proof(CTcpProofCollector::Kind::State, base + 600);
+            f.Legacy(false, base + 600, 0);
+            f.tracker.Expire();
+            const auto counts = f.tracker.GetDiagnostics();
+            Check(counts.windows == 0 && counts.windows == counts.activeWindows + counts.closedWindows,
+                "Sequential closed windows accumulated or the retained count diverged");
+        }
+        const auto d = f.tracker.GetDiagnostics();
+        Check(d.switches == 5100 && d.reclaimedWindows == 5100 && !d.overflows,
+            "More than 5000 source switches exhausted retained-window capacity");
+        Check(!f.Legacy(true, 500, 123) && f.tracker.GetDiagnostics().quarantinedTx == 123,
+            "A very late old event was credited after long-running reclamation");
+    }
+    {
+        SourceFixture f;
+        f.Activate();
+        f.tracker.m_connections.at(1).tick = GetTickCount64() - 61000;
+        f.tracker.Expire();
+        Check(f.tracker.GetDiagnostics().activeWindows == 1,
+            "A timeout without a proven end silently deleted its protection window");
+        Traffic::NetworkEvent untimed;
+        untimed.key = f.key; untimed.hasEndpoints = true; untimed.bytes = 99; untimed.send = true;
+        Check(!f.tracker.KeepLegacy(untimed) && f.tracker.GetDiagnostics().unclockedEvents == 1,
+            "Missing-clock data escaped an unresolved source overlap");
+    }
+    {
+        SourceFixture f;
+        f.tracker.Reset(); f.tracker.SetHealth(true, 1);
+        for (unsigned i = 0; i < 5100; ++i)
+        {
+            f.key.localPort = static_cast<std::uint16_t>(100 + i);
+            f.Legacy(false, 100 + i * 100ULL, 0, true);
+            Traffic::NetworkEvent close;
+            close.key = f.key; close.hasEndpoints = close.lifecycle = true;
+            close.clockType = 1; close.rawTimestamp = 150 + i * 100ULL; close.opcode = 13;
+            f.tracker.KeepLegacy(close);
+        }
+        Check(f.tracker.m_legacy.empty() && !f.tracker.GetDiagnostics().overflows &&
+            f.tracker.GetDiagnostics().normalCloses == 5100,
+            "Closed legacy-only/server markers exhausted the cache during connection churn");
+    }
+    {
+        SourceFixture f;
+        for (unsigned i = 0; i < 4096; ++i)
+        {
+            auto key = f.key; key.pid = 100 + i;
+            f.tracker.m_windows[key].push_back({ 100, 0, i + 10 });
+            ++f.tracker.m_windowCount;
+        }
+        f.tracker.Observe(f.Sample(200, 0, 0, true)); f.tracker.Observe(f.Sample(400));
+        auto d = f.tracker.GetDiagnostics();
+        Check(!d.switches && d.overflows == 1 && d.windows == 4096 && d.activeWindows == 4096,
+            "Full capacity silently removed protection or switched without a guard");
+        for (const auto& entry : f.tracker.m_windows) f.tracker.CloseWindows(entry.first, 1000);
+        f.Proof(CTcpProofCollector::Kind::State, 1200); f.Legacy(false, 1200, 0);
+        f.tracker.Expire();
+        f.tracker.Observe(f.Sample(1400, 0, 0, true)); f.tracker.Observe(f.Sample(1600));
+        d = f.tracker.GetDiagnostics();
+        Check(d.switches == 1 && d.windows == 1 && d.reclaimedWindows == 4096,
+            "Released capacity did not admit a future verified source");
+    }
+    {
+        SourceFixture f;
+        f.Activate();
+        f.Proof(CTcpProofCollector::Kind::Send, 500, f.txOrigin + 10, 10);
+        auto failed = f.Sample(600); failed.error = ERROR_ACCESS_DENIED;
+        f.tracker.Observe(failed);
+        Check(f.tracker.GetDiagnostics().incomplete == 1 && !f.tracker.GetDiagnostics().gaps,
+            "An EStats failure was misreported as proven byte loss");
+        f.Proof(CTcpProofCollector::Kind::Close, 700);
+        f.Proof(CTcpProofCollector::Kind::State, 800); f.Legacy(false, 800, 0);
+        f.tracker.Expire();
+        Check(f.tracker.GetDiagnostics().gaps == 1, "A closed, verified sequence hole was not diagnosed");
+        Traffic::U64 tx{};
+        for (const auto& slice : f.tracker.TakeSlices()) tx += slice.tx;
+        Check(tx == 10, "A sequence-gap diagnostic fabricated missing bytes or replayed the known suffix");
     }
     std::cout << "PASS: real source activation, nonzero prefix/epoch handoff, overlap-clipped fallback, FIN, loss and reused PID gates\n";
-    std::cout << "PASS: pre-handoff rejection preserves legacy bytes; normal idle close also increments fallback/gap diagnostics\n";
+    std::cout << "PASS: 5100 verified switches reclaim windows; late/reused generations stay guarded; normal close is not loss\n";
 }
 void ExactConnectionMatchChecks()
 {

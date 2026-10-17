@@ -3,6 +3,8 @@
 #include <Windows.h>
 #include <filesystem>
 #include <intrin.h>
+#include <iterator>
+#include <stdexcept>
 
 namespace
 {
@@ -11,13 +13,13 @@ std::wstring FormatValue(std::uint64_t value, bool per_sec)
     unsigned unit{};
     int digits{};
     std::uint64_t divisor = 1, scale = 1;
-    constexpr const wchar_t* units[] = { L"B", L"KB", L"MB", L"GB" };
-    while (unit < 3 && value / divisor >= 1024) { divisor *= 1024; ++unit; }
+    constexpr const wchar_t* units[] = { L"B", L"KB", L"MB", L"GB", L"TB", L"PB", L"EB" };
+    while (unit + 1 < std::size(units) && value / divisor >= 1024) { divisor *= 1024; ++unit; }
     if (unit) { digits = unit == 1 ? 1 : 2; scale = digits == 1 ? 10 : 100; }
     auto integer = value / divisor;
-    const auto numerator = value % divisor * scale;
-    auto fraction = numerator / divisor;
-    const auto remainder = numerator % divisor;
+    std::uint64_t high{}, remainder{};
+    const auto numerator = _umul128(value % divisor, scale, &high);
+    auto fraction = _udiv128(high, numerator, divisor, &remainder);
     // Match the existing nearest-even formatting without converting large byte
     // counters to double or linking the CRT floating-point formatter.
     if (remainder > divisor - remainder || (remainder == divisor - remainder && (fraction & 1))) ++fraction;
@@ -106,6 +108,14 @@ std::wstring Utils::ShortLabel(const std::wstring& exe_name, bool is_download)
     return label;
 }
 
+std::wstring Utils::GetHistoryDirectory()
+{
+    wchar_t executable[32768]{};
+    const auto length = GetModuleFileNameW(nullptr, executable, static_cast<DWORD>(std::size(executable)));
+    if (!length || length >= std::size(executable)) throw std::runtime_error("Cannot locate host executable");
+    return (std::filesystem::path(executable).parent_path() / L"history").wstring();
+}
+
 bool Utils::IsProtectedHistoryPath(const std::wstring& base_dir, const std::wstring& output_path)
 {
     if (base_dir.empty() || output_path.empty()) return true;
@@ -114,6 +124,10 @@ bool Utils::IsProtectedHistoryPath(const std::wstring& base_dir, const std::wstr
     if (error) return true;
     const auto target = std::filesystem::weakly_canonical(std::filesystem::path(output_path), error).wstring();
     if (error) return true;
+    // Keep the host's own statistics and the former plugin paths protected too.
+    const auto base = std::filesystem::path(root);
+    if (_wcsicmp(base.filename().c_str(), L"history") == 0 &&
+        IsProtectedHistoryPath(base.parent_path().wstring(), output_path)) return true;
     if (CompareStringOrdinal(root.c_str(), -1, target.c_str(), -1, TRUE) == CSTR_EQUAL) return true;
     auto prefix = root;
     if (prefix.back() != L'\\') prefix += L'\\';

@@ -30,6 +30,8 @@ It is not part of the official TrafficMonitor project.
 3. Start TrafficMonitor **as Administrator**.
 4. Open the plugin manager and confirm that the plugin is loaded.
 
+For an upgrade with existing data, back up and exit TrafficMonitor. Place `HistoryTrafficTool` in the host directory or a subdirectory, then run its `UpdateTrafficHistory.cmd`. The tool detects the format and relocates plugin history, state and caches to `history/` beside the host; official history files stay in place. Keep the host closed until completion. If both locations contain data, retain both copies and resolve the conflict without overwriting them.
+
 ## Download
 
 If you do not want to build the plugin yourself, you can download the prebuilt package from the [Releases](../../releases) page.

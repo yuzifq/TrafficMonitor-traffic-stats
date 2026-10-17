@@ -1,6 +1,13 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
+function Test-HistoryDataDirectory([string]$directory) {
+    foreach ($name in @('app_traffic_history', 'app_traffic_history.tsv', 'app_traffic_state.tsv', 'network_traffic_history')) {
+        if (Test-Path -LiteralPath (Join-Path $directory $name)) { return $true }
+    }
+    return $false
+}
+
 function Find-TrafficMonitorDirectory {
     if (-not [string]::IsNullOrWhiteSpace($env:TM_HISTORY_BASEDIR)) {
         return (Resolve-Path -LiteralPath $env:TM_HISTORY_BASEDIR).Path
@@ -18,8 +25,7 @@ function Find-TrafficMonitorDirectory {
             return (Resolve-Path -LiteralPath $candidate).Path
         }
         if ($null -eq $historyCandidate -and
-            ((Test-Path -LiteralPath (Join-Path $candidate 'app_traffic_history') -PathType Container) -or
-             (Test-Path -LiteralPath (Join-Path $candidate 'app_traffic_history.tsv') -PathType Leaf))) {
+            ((Test-HistoryDataDirectory $candidate) -or (Test-HistoryDataDirectory (Join-Path $candidate 'history')))) {
             $historyCandidate = (Resolve-Path -LiteralPath $candidate).Path
         }
         $parent = Split-Path -Parent $candidate
@@ -38,10 +44,10 @@ try {
     }
     Add-Type -TypeDefinition $script:embeddedMigrationSource -Language CSharp
     $allowRunning = $env:TM_HISTORY_ALLOW_RUNNING -eq '1'
-    exit [TrafficHistoryMigration]::Run($baseDirectory, $allowRunning)
+    exit [TrafficHistoryMigration]::Upgrade($baseDirectory, $allowRunning)
 }
 catch {
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host 'The original history was not changed, or was restored if activation had started.'
+    Write-Host 'Upgrade stopped. Keep the original files and safety backups; review the error above before retrying.'
     exit 1
 }

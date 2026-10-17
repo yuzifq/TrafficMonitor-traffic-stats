@@ -54,6 +54,8 @@ public:
     bool Checkpoint(bool force = false);
     bool IsWriteHealthy() const { return m_writeHealthy; }
     bool IsReady() const { return m_loaded; }
+    bool IsRangeHealthy(const DateTimeRange& range) const { GetRangeTotal(range); return m_loaded && m_rangeHealthy; }
+    bool IsAllTimeHealthy() const { return m_loaded && m_historyReadHealthy; }
     EngineMetadata GetEngineMetadata(const DateTimeRange& range) const;
     std::vector<AppTotalEntry> GetRangeAppTotals(const DateTimeRange& range) const;
     TrafficAmount GetRangeTotal(const DateTimeRange& range) const;
@@ -73,6 +75,7 @@ private:
     };
 
     void EnsureLoaded();
+    bool RequiresAppDictionary() const;
     bool EnsureCompletedSummaries();
     void Load();
     TrafficAmount CalculateStoredHistoryTotal() const;
@@ -136,6 +139,8 @@ private:
     int m_historyMigrationFormat{};
     int m_allTimeRecoveryFormat{};
     mutable bool m_rangeCacheValid{ false };
+    mutable bool m_rangeHealthy{ true }, m_historyReadHealthy{ true };
+    bool m_currentDayHealthy{ true };
     mutable DateTimeRange m_cachedRange{};
     mutable std::vector<AppTotalEntry> m_cachedRangeApps;
     mutable TrafficAmount m_cachedRangeTotal{};

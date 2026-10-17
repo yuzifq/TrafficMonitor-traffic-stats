@@ -108,6 +108,76 @@ void IdentityAndLegacy(const std::filesystem::path& fixture)
         "Corrupt metadata silently changed traffic or was not diagnosed");
     std::cout << "PASS: legacy preservation, path-separated V2 names, unknown ownership, restart, metadata retry/CRC and export\n";
 }
+void DamagedDictionaryAndRaw(const std::filesystem::path& fixture)
+{
+    fakeNow.wHour = 10; fakeNow.wMinute = 0;
+    const auto root = fixture / L"app_traffic_history";
+    const auto raw = root / L"2026/10/2026-10-16.tsv";
+    std::filesystem::create_directories(raw.parent_path());
+    const auto dictionary = root / L"apps.tsv";
+    const std::string good = "version\t4\napp\t1\tlegacy.exe\n";
+    std::ofstream(raw) << "09:00\t1\ta\tb\n";
+    std::ofstream(dictionary) << "version\t4\napp\t!\tbroken.exe\n";
+    const auto original = Contents(dictionary);
+    CHistoryTrafficStore store;
+    store.Initialize(fixture.wstring());
+    store.GetAllTimeTotal();
+    Check(!store.IsReady() && !store.Update({ App(7, 9) }) && Contents(dictionary) == original,
+        "Damaged dictionary was treated as an empty database or overwritten");
+    std::filesystem::remove(dictionary);
+    store.GetAllTimeTotal();
+    Check(!store.IsReady() && !store.Update({ App(7, 9) }) && !std::filesystem::exists(dictionary),
+        "Missing dictionary was silently recreated over existing history IDs");
+    std::ofstream(dictionary) << good;
+    Check(store.GetRangeTotal(Day()).rxBytes == 10 && store.IsRangeHealthy(Day()) && store.IsAllTimeHealthy(),
+        "Restoring a dictionary did not safely reload the original bytes");
+    std::ofstream(raw, std::ios::app) << "corrupt\n";
+    CHistoryTrafficStore damaged;
+    damaged.Initialize(fixture.wstring());
+    damaged.GetRangeTotal(Day());
+    Check(damaged.IsReady() && !damaged.IsRangeHealthy(Day()) && !damaged.IsAllTimeHealthy() &&
+        damaged.GetEngineMetadata(Day()).corrupt,
+        "Malformed raw data was presented as complete zero/partial traffic");
+    const auto before = Contents(raw);
+    std::unordered_map<std::wstring, CHistoryTrafficStore::TrafficAmount> totals{ { L"sentinel", { 3, 5 } } };
+    Check(!damaged.AddMinuteFileTotals(raw.wstring(), Day(), totals) && totals.size() == 1 && totals.at(L"sentinel").rxBytes == 3,
+        "A failed raw read leaked its partial prefix into fallback totals");
+    Check(Contents(raw) == before, "Corrupt-history checks modified the original raw bytes");
+    std::cout << "PASS: damaged/missing dictionary blocks unsafe writes; corrupt raw is unknown and fallback reads are atomic\n";
+}
+
+void ArchiveFallback(const std::filesystem::path& fixture)
+{
+    const auto root = fixture / L"app_traffic_history";
+    const auto raw = root / L"2026/10/2026-10-15.tsv";
+    const auto archive = raw.parent_path() / L"2026-10.tmh";
+    std::filesystem::create_directories(raw.parent_path());
+    std::ofstream(root / L"apps.tsv") << "version\t4\napp\t1\tlegacy.exe\n";
+    std::ofstream(raw) << "09:00\t1\ta\tb\ncorrupt\n";
+    const std::vector<unsigned char> payload{ 1, 0x9c, 4, 1, 0, 10, 11 };
+    {
+        std::ofstream out(archive, std::ios::binary);
+        const auto little = [&](std::uint64_t value, unsigned bytes) {
+            for (unsigned i = 0; i < bytes; ++i) { out.put(static_cast<char>(value & 255)); value >>= 8; }
+        };
+        out.write("TMH2", 4); little(2, 2); little(2026, 2); little(10, 1); little(0, 1);
+        little(1, 4); little(1, 4);
+        out.put(10); out.write("legacy.exe", 10);
+        little(15, 1); little(kTmhHeaderSize + 11 + kTmhDayIndexSize, 8); little(payload.size(), 8);
+        little(1, 8); little(10, 8); little(11, 8); little(CalculateCrc32(payload.data(), payload.size()), 4);
+        out.write(reinterpret_cast<const char*>(payload.data()), payload.size());
+    }
+    const auto rawBefore = Contents(raw), archiveBefore = Contents(archive);
+    CHistoryTrafficStore store;
+    store.Initialize(fixture.wstring());
+    auto range = Day(); range.start.wDay = range.end.wDay = 15;
+    range.start.wHour = range.end.wHour = 9; range.start.wMinute = 0; range.end.wMinute = 1;
+    const auto amount = store.GetRangeTotal(range);
+    Check(amount.rxBytes == 10 && amount.txBytes == 11 && store.IsRangeHealthy(range),
+        "TMH fallback duplicated a damaged raw file's valid prefix or lost the archive");
+    Check(Contents(raw) == rawBefore && Contents(archive) == archiveBefore, "Archive fallback rewrote history");
+    std::cout << "PASS: valid TMH fallback replaces a corrupt raw source without double-counting its prefix\n";
+}
 void MixedSourceMetadata(const std::filesystem::path& fixture)
 {
     fakeNow.wHour = 10; fakeNow.wMinute = 5;
@@ -409,6 +479,8 @@ int main(int argc, char** argv)
         const auto root = std::filesystem::path(L"build") / (L"history-recovery-" + std::to_wstring(GetTickCount64()));
         DateParsing();
         IdentityAndLegacy(root / L"identity");
+        DamagedDictionaryAndRaw(root / L"dictionary-and-raw");
+        ArchiveFallback(root / L"archive-fallback");
         MixedSourceMetadata(root / L"mixed-source");
         GapOnlyMetadata(root / L"gap-only");
         IoFailure(root / L"checkpoint", false);
