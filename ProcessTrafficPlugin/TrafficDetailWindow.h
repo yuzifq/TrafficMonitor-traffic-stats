@@ -119,6 +119,9 @@ private:
     HWND m_adapterLabel{};
     HWND m_adapterCombo{};
     HWND m_followRangeCheck{};
+    HWND m_diagnosticsButton{};
+    HFONT m_font{};
+    int m_lineHeight{ 13 };
     std::vector<std::wstring> m_adapterIds;
     std::vector<std::wstring> m_adapterLabels;
     int m_followQuickRangeId{};

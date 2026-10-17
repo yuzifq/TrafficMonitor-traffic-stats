@@ -324,7 +324,7 @@ void CheckDll(const wchar_t* dll_path)
     } host;
     host.directory = fixture.wstring();
     HMODULE library = LoadLibraryW(std::filesystem::absolute(dll_path).c_str());
-    Check(library != nullptr, "Release DLL failed to load");
+    if (!library) throw std::runtime_error("Release DLL failed to load; Win32 error " + std::to_string(GetLastError()));
     using Entry = ITMPlugin* (*)();
     const auto entry = reinterpret_cast<Entry>(GetProcAddress(library, "TMPluginGetInstance"));
     Check(entry != nullptr, "Plugin entry export is missing");

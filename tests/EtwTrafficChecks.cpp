@@ -13,6 +13,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include "TrafficSnapshotFixture.h"
 
 #define private public
 #include "../ProcessTrafficPlugin/EtwProcNetCollector.h"
@@ -33,6 +34,43 @@ ULONG WINAPI CountPropertyQueries(PEVENT_RECORD event, ULONG contextCount, PTDH_
 #define TdhGetPropertySize CountPropertyQueries
 #include "../ProcessTrafficPlugin/EtwProcNetCollector.cpp"
 #undef TdhGetPropertySize
+
+// Retain decoder fixture assertions without reintroducing a second PID ledger
+// into the production ETW event producer. Unified sampling is tested separately.
+class DecoderFixture : public CEtwProcNetCollector
+{
+public:
+    std::unordered_map<DWORD, ProcessTrafficSnapshot> m_snapshotByPid;
+    ULONGLONG m_lastSampleTick{ GetTickCount64() };
+    std::uint64_t m_sampleSequence{};
+    std::unordered_map<DWORD, std::pair<std::uint64_t, std::uint64_t>> previous;
+    DecoderFixture()
+    {
+        SetEventSink([](void* context, const Traffic::NetworkEvent& event) {
+            if (event.lifecycle || event.retransmit) return;
+            auto& value = static_cast<DecoderFixture*>(context)->m_snapshotByPid[event.key.pid];
+            (event.send ? value.txTotalBytes : value.rxTotalBytes) += event.bytes;
+        }, this);
+    }
+    ~DecoderFixture() { Stop(); }
+    auto GetProcessTrafficSnapshot() const { return m_snapshotByPid; }
+    void SampleTraffic()
+    {
+        const auto now = GetTickCount64();
+        if (now - m_lastSampleTick < 1000) return;
+        ++m_sampleSequence;
+        for (auto& item : m_snapshotByPid)
+        {
+            auto& last = previous[item.first];
+            item.second.rxSampleBytes = item.second.rxTotalBytes - last.first;
+            item.second.txSampleBytes = item.second.txTotalBytes - last.second;
+            item.second.sampleSequence = m_sampleSequence;
+            last = { item.second.rxTotalBytes, item.second.txTotalBytes };
+        }
+        m_lastSampleTick = now;
+    }
+};
+#define CEtwProcNetCollector DecoderFixture
 
 namespace
 {
@@ -256,6 +294,41 @@ void CheckIgnoredEvents()
         "A 16-bit field was accepted as a 32-bit traffic counter");
     std::cout << "PASS: unrelated providers, connection/retransmit events, malformed and empty events ignored" << std::endl;
 }
+
+void CheckConnectionMetadata()
+{
+    std::vector<Traffic::NetworkEvent> events;
+    CEtwProcNetCollector collector;
+    collector.SetEventSink([](void* context, const Traffic::NetworkEvent& event) {
+        static_cast<std::vector<Traffic::NetworkEvent>*>(context)->push_back(event);
+    }, &events);
+    for (const auto& provider : { tcpProvider, udpProvider })
+    {
+        for (const bool ipv6 : { false, true })
+        {
+            NetworkEvent packet(provider, ipv6 ? 26 : 10, 65537, ipv6);
+            const auto portsAt = ipv6 ? 40 : 16;
+            const std::uint16_t dport = 0x3412, sport = 0x7856;
+            std::memcpy(packet.data.data() + portsAt, &dport, 2);
+            std::memcpy(packet.data.data() + portsAt + 2, &sport, 2);
+            packet.record.EventHeader.TimeStamp.QuadPart = 134000000000000000ULL;
+            collector.HandleEventRecord(&packet.record);
+            const auto& event = events.back();
+            Check(event.hasEndpoints && event.key.localPort == sport && event.key.remotePort == dport,
+                "ETW ports were guessed, swapped or read with the wrong size");
+            Check(event.key.pid == testPid && event.key.family == (ipv6 ? 6 : 4) &&
+                event.key.protocol == (IsEqualGUID(provider, tcpProvider) ? 6 : 17) && event.send &&
+                event.bytes == 65537 && event.timestamp == 134000000000000000ULL && event.rawTimestamp == 134000000000000000ULL,
+                "ETW connection envelope lost PID, family, protocol, direction, bytes or event timestamp");
+        }
+    }
+    NetworkEvent connect(tcpProvider, 12, 0, false);
+    connect.record.UserDataLength = static_cast<USHORT>(connect.data.size());
+    collector.HandleEventRecord(&connect.record);
+    Check(events.size() == 5 && events.back().lifecycle && events.back().bytes == 0,
+        "Lifecycle events contributed bytes or did not reach the connection tracker");
+    std::cout << "PASS: connection metadata, network-order ports, event timestamps, TCP/UDP parity and lifecycle envelope" << std::endl;
+}
 }
 
 int main()
@@ -267,6 +340,15 @@ int main()
         CheckProxyForwarding();
         CheckDisplayReadsPreserveSamples();
         CheckIgnoredEvents();
+        CheckConnectionMetadata();
+        CEtwProcNetCollector collector;
+        collector.Start();
+        Check(collector.m_thread.joinable(), "Start returned without launching an ETW worker");
+        collector.Stop();
+        collector.Start();
+        Check(collector.m_thread.joinable(), "ETW failed to restart after a stopped or failed worker");
+        collector.Stop();
+        std::cout << "PASS: ETW worker launch, stop and restart" << std::endl;
         return 0;
     }
     catch (const std::exception& error)

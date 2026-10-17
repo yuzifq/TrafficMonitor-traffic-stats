@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "EtwProcNetCollector.h"
+#include "HybridTrafficCollector.h"
 #include "HistoryTrafficStore.h"
 #include "NetworkTrafficStore.h"
 #include "PluginInterface.h"
@@ -32,9 +32,7 @@ public:
         std::uint64_t txBytesPerSec{};
         std::uint64_t rxTotalBytes{};
         std::uint64_t txTotalBytes{};
-        std::uint64_t rxSampleBytes{};
-        std::uint64_t txSampleBytes{};
-        std::uint64_t sampleSequence{};
+        std::wstring identity;
     };
 
     static CProcNetPlugin& Instance();
@@ -55,6 +53,7 @@ public:
     std::wstring BuildLiveNetworkText(CHistoryTrafficStore::DisplayLanguage language) const;
     CNetworkTrafficCollector::Snapshot GetNetworkSnapshot() const;
     bool SetNetworkAdapter(const std::wstring& id);
+    std::wstring BuildDiagnosticsText(CHistoryTrafficStore::DisplayLanguage language) const;
     bool ExportHistory(
         const CHistoryTrafficStore::DateTimeRange& range,
         const std::wstring& output_path,
@@ -68,17 +67,13 @@ private:
     CProcNetPlugin();
     ~CProcNetPlugin();
 
-    std::vector<CProcessFinder::ProcessEntry> GetCachedProcesses() const;
     static bool IsEnglish(CHistoryTrafficStore::DisplayLanguage language);
     static const wchar_t* GetLocalizedText(CHistoryTrafficStore::DisplayLanguage language, const LocalizedText& text);
     static const wchar_t* GetInfoText(PluginInfoIndex index, CHistoryTrafficStore::DisplayLanguage language);
-    static std::unordered_map<std::wstring, std::wstring> BuildPathMapByName(const std::vector<CProcessFinder::ProcessEntry>& processes);
-    static AppTrafficEntry MakeAppEntry(const std::wstring& exe_name, const std::unordered_map<std::wstring, std::wstring>& path_by_name);
-    static CHistoryTrafficStore::AppTotalEntry MakeHistoryEntry(const AppTrafficEntry& app);
     static void SetItemPair(CProcNetItem& down_item, CProcNetItem& up_item, const AppTrafficEntry* app, int index, bool english);
     static std::wstring BuildTooltipText(const std::vector<AppTrafficEntry>& apps, int visible_count, bool english, const std::wstring& status_text);
     void UpdateDisplayText(const std::vector<AppTrafficEntry>& apps);
-    void UpdateHistory(const std::vector<AppTrafficEntry>& apps);
+    void UpdateHistory();
     void EnsureCollectorStarted();
     void EnsureHistoryInitialized();
     void EnsureDetailWindow();
@@ -88,7 +83,7 @@ private:
     static constexpr int kMaxApps = 5;
 
     std::vector<CProcNetItem> m_items;
-    CEtwProcNetCollector m_collector;
+    CHybridTrafficCollector m_collector;
     CHistoryTrafficStore m_historyStore;
     CNetworkTrafficCollector m_networkCollector;
     CNetworkTrafficStore m_networkStore;
@@ -98,10 +93,5 @@ private:
     bool m_collectorStarted;
     bool m_historyInitialized;
     std::uint64_t m_lastHistorySampleSequence{};
-    mutable std::mutex m_processCacheMutex;
-    mutable ULONGLONG m_processCacheTick;
-    mutable std::vector<CProcessFinder::ProcessEntry> m_cachedProcesses;
-    mutable std::unordered_map<DWORD, CProcessFinder::ProcessEntry> m_knownProcessesByPid;
-    mutable std::unordered_map<DWORD, ULONGLONG> m_knownProcessLastSeenTick;
     std::unique_ptr<CTrafficDetailWindow> m_detailWindow;
 };

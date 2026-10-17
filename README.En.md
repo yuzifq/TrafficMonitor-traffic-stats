@@ -20,7 +20,7 @@ It is not part of the official TrafficMonitor project.
 
 - TrafficMonitor with plugin API version `7`
 - Windows x64
-- Visual Studio 2022 or Build Tools for Visual Studio 2022
+- Visual Studio or Build Tools with the MSVC v145 toolset and Windows SDK
 - Build target: `Release | x64`
 
 ## Installation
@@ -58,9 +58,32 @@ Adapter history is stored alongside process history in `network_traffic_history/
 
 Release builds retain the static `/MT` runtime and use size optimization, whole-program optimization and unused-code elimination. No additional Visual C++ runtime installation is required.
 
+## V2 Connection-Level Hybrid Collection
+
+Process accounting uses ETW and switches qualified TCP connections to EStats only at verified boundaries. Sources are never added for the same interval, scaled to adapter totals, or selected merely because one is larger. UDP, short flows and existing connections without sufficient boundary evidence remain on ETW.
+
+- Native IPv4/IPv6 EStats enables only `TcpConnectionEstatsData`. No extra driver, service or runtime is required. ETW continues when EStats cannot be enabled.
+- Connection tables are checked every 500 ms, with counter reads targeting one second, independently of UI refresh. Initial observations, counter rollback and recovery after failed sampling establish new baselines rather than backfilling unknown intervals.
+- Native TCP endpoint, lifecycle and sequence events verify the handoff. A complete ETW prefix must agree with two stable native snapshots; previously credited bytes are not replayed. Missing identity, sequence origins or boundary evidence denies the switch.
+- Failed, stale or inconsistent EStats reads fall back to verified uncredited ETW sequence ranges. Overlaps and SYN/FIN sequence space are excluded; unresolved coverage is marked incomplete, never estimated or filled from adapter totals.
+- History commits and checkpoints run on the independent collection schedule, without host/UI callbacks. Failed writes retry the same batch instead of accumulating it again.
+- Identities include endpoints, IPv6 scopes, PID, process creation time and a connection generation. `TCP_TABLE_OWNER_MODULE_ALL` supplies both owning PID and connection creation time for stronger tuple-reuse validation than a PID-only table.
+- New history distinguishes same-name applications by full executable path. Unknown ownership retains its bytes under anonymous PID entries; hiding those rows does not change totals.
+- Legacy history is retained. New records reuse daily TSV files and the dictionary; state records the first V2 observation. Checksummed daily `.quality.tsv` files record source, confidence and observed event endpoints, not minute coverage or another additive traffic ledger.
+- Corrupt provenance marks source/completeness unknown without modifying valid bytes. Legacy records are not backfilled or presented as V2 observations.
+- New checkpoints and append transactions carry unique commit IDs and checksums. Legitimate identical traffic in one minute is not mistaken for a replay; conflicting recovery preserves existing files and reports an error.
+- Diagnostics reports ETW loss/parsing failures, EStats enable/read failures, actual source switches, fallbacks, incomplete intervals, unknown bytes and history write health. Zero-byte uncertainty markers are persisted too. Pausing refresh affects the UI only.
+- Release x64 emits a linker map and fails if the DLL reaches **600,000 bytes**. API 7 has no unload callback, so collection pins the module; exit TrafficMonitor to fully unload it.
+
+Counter semantics matter: [EStats `DataBytesIn/Out`](https://learn.microsoft.com/en-us/windows/win32/api/tcpestats/ns-tcpestats-tcp_estats_data_rod_v0) includes retransmitted data and excludes TCP headers; adapter counters also include protocol/control traffic. Process totals are not promised to equal adapter totals. Real IPv4/IPv6 tests verify nonzero-prefix handoff, omitted legacy-event recovery and failure fallback; see `V2_IMPLEMENTATION.md` for evidence and limitations.
+
+API 7 has no exit callback. The plugin never joins workers under the DLL loader lock. Normal Stop removes owned proof sessions; after abrupt process exit, the next start removes abandoned sessions only after validating their GUID, PID and process birth, preserving live sessions.
+
+Controlled TCP, external comparison and load-test tools are under `tests/` and are not DLL runtime dependencies. Their reports do not establish correctness for every proxy, VPN or Windows networking configuration.
+
 ## Build
 
-Open `ProcessTrafficPlugin.sln` in Visual Studio 2022 or Build Tools for Visual Studio 2022, then build with:
+Open `ProcessTrafficPlugin.sln` in Visual Studio or Build Tools with the MSVC v145 toolset and Windows SDK, then build with:
 
 - **Configuration:** `Release`
 - **Platform:** `x64`

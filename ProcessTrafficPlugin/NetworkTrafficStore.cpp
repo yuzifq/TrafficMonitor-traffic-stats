@@ -1,4 +1,5 @@
 #include "NetworkTrafficStore.h"
+#include "Utils.h"
 
 #include <algorithm>
 #include <array>
@@ -74,10 +75,11 @@ SYSTEMTIME UtcTime(U64 milliseconds)
 std::string Timestamp(U64 milliseconds)
 {
     const auto t = UtcTime(milliseconds);
-    char buffer[40]{};
-    sprintf_s(buffer, "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ", t.wYear, t.wMonth, t.wDay,
-        t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
-    return buffer;
+    const auto wide = Utils::FormatDateTime(t, true, L'T') + L"." + Utils::PaddedNumber(t.wMilliseconds, 3) + L"Z";
+    std::string text;
+    text.reserve(wide.size());
+    for (const auto ch : wide) text += static_cast<char>(ch); // Canonical UTC digits and separators are ASCII.
+    return text;
 }
 
 U64 Coverage(std::vector<std::pair<U64, U64>>& spans)
@@ -98,9 +100,7 @@ std::wstring CNetworkTrafficStore::DayKey(U64 utc_ms)
     const auto utc = UtcTime(utc_ms);
     SYSTEMTIME local{};
     if (!SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) return {};
-    wchar_t buffer[16]{};
-    swprintf_s(buffer, L"%04u-%02u-%02u", local.wYear, local.wMonth, local.wDay);
-    return buffer;
+    return Utils::FormatDate(local);
 }
 
 std::filesystem::path CNetworkTrafficStore::DayPath(const std::wstring& key) const
@@ -506,22 +506,7 @@ CNetworkTrafficStore::Amount CNetworkTrafficStore::GetAllTimeTotal(bool* healthy
 
 bool CNetworkTrafficStore::IsManagedPath(const std::wstring& path) const
 {
-    if (path.empty() || m_root.empty()) return false;
-    std::error_code error;
-    const auto root = std::filesystem::weakly_canonical(m_root.parent_path(), error);
-    if (error) return true;
-    const auto target = std::filesystem::weakly_canonical(std::filesystem::path(path), error);
-    if (error) return true;
-    auto prefix = root.wstring();
-    if (prefix.back() != L'\\') prefix += L'\\';
-    const auto full = target.wstring();
-    if (full.size() < prefix.size() || _wcsnicmp(full.c_str(), prefix.c_str(), prefix.size()) != 0) return false;
-    const auto relative = full.substr(prefix.size());
-    const auto first = relative.substr(0, relative.find(L'\\'));
-    return _wcsicmp(first.c_str(), L"network_traffic_history") == 0 ||
-        _wcsicmp(first.c_str(), L"app_traffic_history") == 0 ||
-        _wcsnicmp(first.c_str(), L"app_traffic_state.tsv", 21) == 0 ||
-        _wcsnicmp(first.c_str(), L"history_traffic.dat", 19) == 0;
+    return Utils::IsProtectedHistoryPath(m_root.parent_path().wstring(), path);
 }
 
 bool CNetworkTrafficStore::ExportRange(const Range& range, const std::wstring& output_path, std::wstring& error) const
@@ -539,8 +524,8 @@ bool CNetworkTrafficStore::ExportRange(const Range& range, const std::wstring& o
     output << "StartUtc\tEndUtc\tDownloadBytes\tUploadBytes\tAdapterId\tPrecision\tRangeRelation\n";
     const auto write = [&](const Record& record) {
         if (record.endMs <= start || record.startMs >= end) return;
-        output << Timestamp(record.startMs) << '\t' << Timestamp(record.endMs) << '\t' << record.rxBytes << '\t' <<
-            record.txBytes << '\t' << NarrowId(record.adapterId) << '\t' <<
+        output << Timestamp(record.startMs) << '\t' << Timestamp(record.endMs) << '\t' << std::to_string(record.rxBytes) << '\t' <<
+            std::to_string(record.txBytes) << '\t' << NarrowId(record.adapterId) << '\t' <<
             (record.coarse ? "coarse" : "sampled") << '\t' <<
             (record.startMs >= start && record.endMs <= end ? "inside" : "boundary") << '\n';
     };

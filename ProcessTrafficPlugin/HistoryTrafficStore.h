@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include "TrafficTypes.h"
 
 class CHistoryTrafficStore
 {
@@ -29,6 +30,10 @@ public:
         std::wstring exePath;
         std::uint64_t rxTotalBytes{};
         std::uint64_t txTotalBytes{};
+        std::wstring identity;
+        std::uint64_t sampleStart{}, sampleEnd{};
+        Traffic::Source source{ Traffic::Source::Etw };
+        Traffic::Confidence confidence{ Traffic::Confidence::Normal };
     };
 
     struct TrafficAmount
@@ -36,10 +41,20 @@ public:
         std::uint64_t rxBytes{};
         std::uint64_t txBytes{};
     };
+    struct EngineMetadata
+    {
+        std::uint64_t cutover{}, firstEvent{}, lastEvent{}, minutes{};
+        unsigned sources{}, confidence{};
+        bool corrupt{}, legacy{};
+    };
 
     void Initialize(const std::wstring& base_dir);
     std::wstring GetStorageDirectory() const;
-    void Update(const std::vector<AppTotalEntry>& apps);
+    bool Update(const std::vector<AppTotalEntry>& apps);
+    bool Checkpoint(bool force = false);
+    bool IsWriteHealthy() const { return m_writeHealthy; }
+    bool IsReady() const { return m_loaded; }
+    EngineMetadata GetEngineMetadata(const DateTimeRange& range) const;
     std::vector<AppTotalEntry> GetRangeAppTotals(const DateTimeRange& range) const;
     TrafficAmount GetRangeTotal(const DateTimeRange& range) const;
     TrafficAmount GetAllTimeTotal() const;
@@ -72,7 +87,10 @@ private:
     bool AppendHistoryEntries(const std::wstring& bucket_key, const std::vector<std::pair<std::wstring, TrafficAmount>>& entries);
     void LoadCheckpoint();
     bool SaveCheckpoint();
+    bool EnsureCommitId();
     bool FlushCurrentMinute();
+    bool AppendEngineMetadata();
+    bool RecoverAppend();
     void ClearCheckpoint() const;
     void LoadState();
     bool SaveState() const;
@@ -105,7 +123,8 @@ private:
     std::unordered_map<std::wstring, BucketAppMap> m_bucketByApp;
     std::wstring m_currentMinuteKey;
     BucketAppMap m_currentMinuteTotals;
-    bool m_currentMinuteAppendUncertain{ false };
+    std::uint64_t m_currentCommitId{};
+    bool m_legacyCheckpoint{}, m_checkpointBlocked{};
     ULONGLONG m_lastCheckpointTick{};
     mutable std::unordered_map<std::wstring, BucketTimeRange> m_bucketTimeRangeByKey;
     std::unordered_map<std::wstring, std::uint64_t> m_appIdByName;
@@ -123,4 +142,6 @@ private:
     mutable bool m_allTimeCacheValid{ false };
     mutable TrafficAmount m_cachedAllTimeTotal{};
     bool m_hasPersistedAllTime{ false };
+    bool m_checkpointDirty{}, m_stateDirty{}, m_writeHealthy{ true };
+    EngineMetadata m_engine, m_currentEngine;
 };

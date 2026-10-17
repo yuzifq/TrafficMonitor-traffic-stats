@@ -44,6 +44,7 @@ constexpr int kWeekRangeButtonId = 1017;
 constexpr int kExportButtonId = 1018;
 constexpr int kAdapterComboId = 1019;
 constexpr int kFollowRangeId = 1020;
+constexpr int kDiagnosticsId = 1021;
 constexpr int kSummaryId = 1003;
 constexpr int kListId = 1004;
 constexpr int kMargin = 10;
@@ -307,27 +308,12 @@ LocalizedText GetPauseButtonText(bool refresh_paused)
 
 std::wstring BuildExportFileName(const CHistoryTrafficStore::DateTimeRange& range)
 {
-    wchar_t buffer[64]{};
     const bool same_day = range.start.wYear == range.end.wYear &&
         range.start.wMonth == range.end.wMonth &&
         range.start.wDay == range.end.wDay;
-    if (same_day)
-    {
-        swprintf_s(buffer, L"%04u-%02u-%02u.tsv", range.start.wYear, range.start.wMonth, range.start.wDay);
-    }
-    else
-    {
-        swprintf_s(
-            buffer,
-            L"%04u-%02u-%02u_%04u-%02u-%02u.tsv",
-            range.start.wYear,
-            range.start.wMonth,
-            range.start.wDay,
-            range.end.wYear,
-            range.end.wMonth,
-            range.end.wDay);
-    }
-    return buffer;
+    auto name = Utils::FormatDate(range.start);
+    if (!same_day) name += L"_" + Utils::FormatDate(range.end);
+    return name + L".tsv";
 }
 }
 
@@ -364,11 +350,25 @@ CTrafficDetailWindow::CTrafficDetailWindow(CProcNetPlugin& plugin)
       m_totalColumnWidths{ 26, 234, 150, 150, 150 },
       m_defaultIconIndex(-1)
 {
+    NONCLIENTMETRICSW metrics{ sizeof(metrics) };
+    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0))
+        m_font = CreateFontIndirectW(&metrics.lfMessageFont);
+    if (m_font)
+    {
+        const auto dc = GetDC(nullptr);
+        const auto old = SelectObject(dc, m_font);
+        TEXTMETRICW text{};
+        if (GetTextMetricsW(dc, &text)) m_lineHeight = text.tmHeight;
+        SelectObject(dc, old);
+        ReleaseDC(nullptr, dc);
+    }
 }
 
 CTrafficDetailWindow::~CTrafficDetailWindow()
 {
     StopIconWorker();
+    if (m_hwnd && IsWindow(m_hwnd)) DestroyWindow(m_hwnd);
+    if (m_font) DeleteObject(m_font);
 }
 
 void CTrafficDetailWindow::Show(HWND parent)
@@ -476,6 +476,8 @@ void CTrafficDetailWindow::CreateChildControls(HWND hwnd)
     m_pauseRefreshButton = CreateChildWindow(
         L"BUTTON", L"暂停刷新界面", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         730, kMargin, kButtonWidth, kButtonHeight, hwnd, kPauseRefreshButtonId);
+    m_diagnosticsButton = CreateChildWindow(L"BUTTON", L"Diagnostics", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        380, kMargin, 110, kButtonHeight, hwnd, kDiagnosticsId);
 
     m_adapterLabel = CreateChildWindow(L"STATIC", L"Adapter:", WS_CHILD | WS_VISIBLE,
         kMargin, 52, kRangeLabelWidth, kLabelHeight, hwnd, 0);
@@ -535,12 +537,12 @@ void CTrafficDetailWindow::CreateChildControls(HWND hwnd)
 
 void CTrafficDetailWindow::SetAllControlFonts() const
 {
-    const auto font = reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT));
+    const auto font = reinterpret_cast<WPARAM>(m_font ? m_font : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
     const HWND controls[] = {
         m_toggleViewButton, m_languageLabel, m_languageCombo, m_pauseRefreshButton,
         m_startLabel, m_startDatePicker, m_startTimePicker, m_endLabel, m_endDatePicker,
         m_endTimePicker, m_hidePidCheck, m_exportButton, m_dayRangeButton, m_weekRangeButton,
-        m_monthRangeButton, m_yearRangeButton, m_list, m_summary, m_adapterLabel, m_adapterCombo, m_followRangeCheck
+        m_monthRangeButton, m_yearRangeButton, m_list, m_summary, m_adapterLabel, m_adapterCombo, m_followRangeCheck, m_diagnosticsButton
     };
 
     for (HWND control : controls)
@@ -686,6 +688,7 @@ void CTrafficDetailWindow::ApplyLanguageTexts()
 {
     const auto language = GetSelectedLanguage();
     SetWindowTextIfPresent(m_languageLabel, GetLocalizedText(language, { L"Language:", L"语言:" }));
+    SetWindowTextIfPresent(m_diagnosticsButton, GetLocalizedText(language, { L"Diagnostics", L"诊断" }));
     SetWindowTextIfPresent(m_adapterLabel, GetLocalizedText(language, { L"Adapter:", L"采集网卡:" }));
     SetWindowTextIfPresent(m_followRangeCheck, GetLocalizedText(language, { L"Follow current time", L"跟随当前时间" }));
     SetWindowTextIfPresent(m_startLabel, GetLocalizedText(language, { L"Start:", L"开始时间:" }));
@@ -1402,6 +1405,7 @@ void CTrafficDetailWindow::LayoutTopControls(int width)
     MoveControlIfPresent(m_toggleViewButton, kMargin, kMargin, kButtonWidth, kButtonHeight);
     MoveControlIfPresent(m_languageLabel, language_left, kMargin + 4, kLanguageLabelWidth, 20);
     MoveControlIfPresent(m_languageCombo, language_left + kLanguageLabelWidth, kMargin, kLanguageComboWidth, 300);
+    MoveControlIfPresent(m_diagnosticsButton, language_left + kLanguageLabelWidth + kLanguageComboWidth + 12, kMargin, 110, kButtonHeight);
     MoveControlIfPresent(m_pauseRefreshButton, right_button_x, kMargin, kButtonWidth, kButtonHeight);
     MoveControlIfPresent(m_adapterLabel, kMargin, 52, kRangeLabelWidth, kLabelHeight);
     MoveControlIfPresent(m_adapterCombo, kMargin + kRangeLabelWidth, 48, width - kMargin * 2 - kRangeLabelWidth, 300);
@@ -1409,17 +1413,19 @@ void CTrafficDetailWindow::LayoutTopControls(int width)
 
 void CTrafficDetailWindow::LayoutBottomControls(int width, int height)
 {
+    const int live_height = (std::max)(kLiveSummaryHeight, m_lineHeight * 3 + 8);
+    const int summary_height = (std::max)(kSummaryHeight, m_lineHeight * 14 + 8);
     if (m_viewMode == ViewMode::Realtime)
     {
-        MoveControlIfPresent(m_summary, kMargin, height - kMargin - kLiveSummaryHeight, width - kMargin * 2, kLiveSummaryHeight);
+        MoveControlIfPresent(m_summary, kMargin, height - kMargin - live_height, width - kMargin * 2, live_height);
         return;
     }
 
-    const int range_block_top = height - kMargin - kSummaryHeight;
+    const int range_block_top = height - kMargin - summary_height;
     const int range_block_left = kMargin + kSummaryWidth + 16;
     const int picker_left = range_block_left + kRangeLabelWidth;
     const int quick_button_left = width - kMargin - kQuickButtonWidth;
-    MoveControlIfPresent(m_summary, kMargin, range_block_top, kSummaryWidth, kSummaryHeight);
+    MoveControlIfPresent(m_summary, kMargin, range_block_top, kSummaryWidth, summary_height);
     MoveControlIfPresent(m_startLabel, range_block_left, range_block_top + 4, kRangeLabelWidth, 20);
     MoveControlIfPresent(m_startDatePicker, picker_left, range_block_top, kRangeDateWidth, 28);
     MoveControlIfPresent(m_startTimePicker, picker_left + kRangeDateWidth + 8, range_block_top, kRangeTimeWidth, 28);
@@ -1438,13 +1444,15 @@ void CTrafficDetailWindow::LayoutBottomControls(int width, int height)
 void CTrafficDetailWindow::LayoutListControl(int width, int height)
 {
     const int list_width = width - kMargin * 2;
+    const int summary_height = m_viewMode == ViewMode::Realtime ?
+        (std::max)(kLiveSummaryHeight, m_lineHeight * 3 + 8) : (std::max)(kSummaryHeight, m_lineHeight * 14 + 8);
     if (m_viewMode == ViewMode::Realtime)
     {
-        MoveControlIfPresent(m_list, kMargin, kTopAreaHeight, list_width, height - kTopAreaHeight - kLiveSummaryHeight - kMargin * 2);
+        MoveControlIfPresent(m_list, kMargin, kTopAreaHeight, list_width, height - kTopAreaHeight - summary_height - kMargin * 2);
         return;
     }
 
-    MoveControlIfPresent(m_list, kMargin, kTopAreaHeight, list_width, height - kTopAreaHeight - kSummaryHeight - kMargin * 2);
+    MoveControlIfPresent(m_list, kMargin, kTopAreaHeight, list_width, height - kTopAreaHeight - summary_height - kMargin * 2);
 }
 
 bool CTrafficDetailWindow::IsInteractiveControlActive() const
@@ -1495,6 +1503,13 @@ bool CTrafficDetailWindow::HandleCommand(WORD command_id, WORD notify_code)
     if (command_id == kPauseRefreshButtonId)
     {
         ToggleRefreshPaused();
+        return true;
+    }
+    if (command_id == kDiagnosticsId)
+    {
+        const auto language = GetSelectedLanguage();
+        const auto text = m_plugin.BuildDiagnosticsText(language);
+        MessageBoxW(m_hwnd, text.c_str(), GetLocalizedText(language, { L"Diagnostics", L"诊断" }), MB_OK | MB_ICONINFORMATION);
         return true;
     }
     if (command_id == kDayRangeButtonId || command_id == kWeekRangeButtonId ||
@@ -1630,6 +1645,7 @@ void CTrafficDetailWindow::ResetControlHandles()
     m_dayRangeButton = m_weekRangeButton = nullptr;
     m_monthRangeButton = m_yearRangeButton = m_summary = nullptr;
     m_adapterLabel = m_adapterCombo = m_followRangeCheck = nullptr;
+    m_diagnosticsButton = nullptr;
     m_adapterIds.clear();
     m_adapterLabels.clear();
 }

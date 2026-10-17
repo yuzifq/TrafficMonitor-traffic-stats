@@ -9,22 +9,19 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <unordered_map>
+#include "TrafficTypes.h"
 
 struct _EVENT_RECORD;
 
 class CEtwProcNetCollector
 {
 public:
-    struct ProcessTrafficSnapshot
+    using EventSink = void (*)(void*, const Traffic::NetworkEvent&);
+    struct Diagnostics
     {
-        std::uint64_t rxBytesPerSec{};
-        std::uint64_t txBytesPerSec{};
-        std::uint64_t rxTotalBytes{};
-        std::uint64_t txTotalBytes{};
-        std::uint64_t rxSampleBytes{};
-        std::uint64_t txSampleBytes{};
-        std::uint64_t sampleSequence{};
+        std::uint64_t accepted{}, parseFailures{}, endpointFailures{}, loopbackBytes{}, unsupportedVersions{}, bufferedBeforeStart{},
+            eventsLost{}, realtimeBuffersLost{}, sessionResets{}, retransmitEvents{}, retransmitBytes{};
+        ULONG sessionFlags{}, queryError{}, clockType{};
     };
 
     CEtwProcNetCollector();
@@ -33,16 +30,16 @@ public:
     bool Start();
     void Stop();
 
-    // Only the host data callback advances samples; detail windows read them without consuming traffic.
-    void SampleTraffic();
-    std::unordered_map<DWORD, ProcessTrafficSnapshot> GetProcessTrafficSnapshot() const;
     std::wstring GetStatusText() const;
+    void SetEventSink(EventSink sink, void* context);
+    Diagnostics GetDiagnostics() const;
 
 private:
     bool StartTraceSession();
     void StopTraceSession();
     void WorkerLoop();
     void HandleEventRecord(_EVENT_RECORD* event_record);
+    Traffic::U64 EventTime(Traffic::U64 raw, bool& before_start) const;
     void UpdateStatus(std::wstring status_text);
     ULONG TryGetFixedProperty(_EVENT_RECORD* event_record, const wchar_t* property_name, void* value, ULONG size) const;
     ULONG TryGetUInt32Property(_EVENT_RECORD* event_record, const wchar_t* property_name, std::uint32_t& value) const;
@@ -59,13 +56,19 @@ private:
     std::wstring m_sessionName;
     GUID m_sessionGuid;
     TRACEHANDLE m_sessionHandle;
-    TRACEHANDLE m_traceHandle;
+    std::atomic<TRACEHANDLE> m_traceHandle;
     bool m_ownsSession;
-    mutable ULONGLONG m_lastSampleTick;
-    mutable std::uint64_t m_sampleSequence;
+    bool m_includeLoopback{ false };
+    bool m_captureSequence{ false };
+    bool m_reportRejected{ false };
+    EventSink m_eventSink{};
+    void* m_eventContext{};
+    mutable Diagnostics m_diagnostics;
+    mutable ULONG m_initialEventsLost{}, m_initialBuffersLost{};
+    mutable bool m_hasLossBaseline{};
+    Traffic::U64 m_startFileTime{};
+    Traffic::U64 m_startCounter{}, m_counterFrequency{};
+    ULONG m_timestampClock{};
     std::unique_ptr<unsigned char[]> m_propertiesBuffer;
 
-    mutable std::unordered_map<DWORD, ProcessTrafficSnapshot> m_snapshotByPid;
-    mutable std::unordered_map<DWORD, std::uint64_t> m_lastRxTotalByPid;
-    mutable std::unordered_map<DWORD, std::uint64_t> m_lastTxTotalByPid;
 };

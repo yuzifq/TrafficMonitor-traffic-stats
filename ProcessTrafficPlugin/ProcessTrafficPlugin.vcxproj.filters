@@ -12,6 +12,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="EtwProcNetCollector.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="HybridTrafficCollector.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="TcpEStatsCollector.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="TcpProofCollector.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="TcpSourceTracker.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="TrafficTypes.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="HistoryTrafficStore.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="NetworkTrafficCollector.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="NetworkTrafficStore.h"><Filter>Header Files</Filter></ClInclude>
@@ -24,6 +29,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="EtwProcNetCollector.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="HybridTrafficCollector.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="TcpEStatsCollector.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="TcpProofCollector.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="TcpSourceTracker.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="HistoryTrafficStore.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="NetworkTrafficCollector.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="NetworkTrafficStore.cpp"><Filter>Source Files</Filter></ClCompile>

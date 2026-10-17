@@ -373,6 +373,87 @@ void CheckUnicodeState(const std::filesystem::path& fixture)
         "UTF-8 state/checkpoint round trip changed process names, paths or totals");
     std::cout << "PASS: UTF-8 process state/checkpoint and byte totals after parser cleanup" << std::endl;
 }
+void CheckIntegerFormatting()
+{
+    const std::pair<std::uint64_t, const wchar_t*> values[] = {
+        { 0, L"0 B" }, { 1023, L"1023 B" }, { 1024, L"1.0 KB" }, { 1280, L"1.2 KB" },
+        { 1792, L"1.8 KB" }, { 1048575, L"1024.0 KB" }, { 1048576, L"1.00 MB" },
+        { 1179648, L"1.12 MB" }, { 1441792, L"1.38 MB" }, { 1073741824ULL, L"1.00 GB" },
+        { 1207959552ULL, L"1.12 GB" }, { UINT64_MAX, L"17179869184.00 GB" }
+    };
+    for (const auto& value : values)
+    {
+        Check(Utils::FormatBytes(value.first) == value.second, "Integer byte formatter changed a unit or nearest-even tie");
+        Check(Utils::FormatRate(value.first) == std::wstring(value.second) + L"/s", "Rate units differ from byte units");
+    }
+    Check(Utils::FormatPercent(0, 0) == L"0.00%" && Utils::FormatPercent(1, 3) == L"33.33%" &&
+        Utils::FormatPercent(2, 3) == L"66.67%" && Utils::FormatPercent(1, 20000) == L"0.00%" &&
+        Utils::FormatPercent(3, 20000) == L"0.02%" && Utils::FormatPercent(UINT64_MAX, UINT64_MAX) == L"100.00%" &&
+        Utils::FormatPercent(UINT64_MAX, UINT64_MAX / 2) == L"200.00%" && Utils::FormatPercent(UINT64_MAX, 1) == L"n/a",
+        "Coverage formatter rounded incorrectly, overflowed, or masked coverage above 100 percent");
+    std::cout << "PASS: integer byte/rate units, nearest-even ties, full-width counters and overflow-safe coverage formatting\n";
+}
+void CheckPausedCheckpoint(CProcNetPlugin& plugin, const std::filesystem::path& fixture)
+{
+    CHistoryTrafficStore::DateTimeRange verificationRange;
+    GetLocalTime(&verificationRange.start);
+    verificationRange.start.wHour = verificationRange.start.wMinute = 0;
+    plugin.m_historyStore.Initialize(fixture.wstring());
+    plugin.m_historyStore.GetAllTimeTotal();
+    plugin.m_historyInitialized = true;
+    CTrafficDetailWindow view(plugin);
+    const auto window = CreateHiddenWindow(view);
+    view.ToggleRefreshPaused();
+    Check(view.m_refreshPaused, "UI did not pause");
+    plugin.m_collector.Start();
+    const auto stop = [&] { plugin.m_collector.Stop(); DestroyWindow(window); };
+    try
+    {
+        Traffic::NetworkEvent event;
+        event.key.pid = 4294967293u; event.key.family = 4; event.key.protocol = 17;
+        event.timestamp = Traffic::FileTimeNow(); event.bytes = 1234;
+        plugin.m_collector.m_etw.m_eventSink(plugin.m_collector.m_etw.m_eventContext, event);
+        PumpUntil([&] {
+            std::lock_guard<std::mutex> lock(plugin.m_historyMutex);
+            return plugin.m_historyStore.GetAllTimeTotal().rxBytes >= 1234;
+        }, 5000);
+        const auto checkpoint = fixture / L"app_traffic_history/current.tmp";
+        Check(std::filesystem::exists(checkpoint), "Paused UI did not checkpoint without host callbacks");
+        const auto original = std::filesystem::last_write_time(checkpoint);
+        ULONGLONG originalTick{};
+        {
+            std::lock_guard<std::mutex> lock(plugin.m_historyMutex);
+            originalTick = plugin.m_historyStore.m_lastCheckpointTick;
+        }
+        event.timestamp = Traffic::FileTimeNow(); event.send = true; event.bytes = 5678;
+        plugin.m_collector.m_etw.m_eventSink(plugin.m_collector.m_etw.m_eventContext, event);
+        ULONGLONG previousTick = originalTick, maximumGap{};
+        PumpUntil([&] {
+            std::lock_guard<std::mutex> lock(plugin.m_historyMutex);
+            const auto tick = plugin.m_historyStore.m_lastCheckpointTick;
+            if (tick > previousTick) { maximumGap = (std::max)(maximumGap, tick - previousTick); previousTick = tick; }
+            return plugin.m_historyStore.GetAllTimeTotal().txBytes >= 5678 &&
+                !plugin.m_historyStore.m_checkpointDirty && std::filesystem::last_write_time(checkpoint) != original;
+        }, 12000);
+        {
+            std::lock_guard<std::mutex> lock(plugin.m_historyMutex);
+            Check(maximumGap <= 10000, "Independent checkpoint exceeded its ten-second target");
+            std::cout << "checkpoint_gap_ms=" << maximumGap << '\n';
+        }
+        stop();
+        CHistoryTrafficStore reopened;
+        reopened.Initialize(fixture.wstring());
+        // A deliberately paused UI range can end in the previous minute/day.
+        // Verify persisted collection with an explicit range through test end.
+        GetLocalTime(&verificationRange.end);
+        const auto apps = reopened.GetRangeAppTotals(verificationRange);
+        const auto target = std::find_if(apps.begin(), apps.end(), [](const auto& app) { return app.appName == L"PID4294967293"; });
+        Check(target != apps.end() && target->rxTotalBytes == 1234 && target->txTotalBytes == 5678,
+            "Paused/no-host checkpoint did not recover exact increments");
+    }
+    catch (...) { stop(); throw; }
+    std::cout << "PASS: paused UI and no host calls retain exact traffic with independently refreshed durable checkpoints\n";
+}
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -408,6 +489,8 @@ int wmain(int argc, wchar_t** argv)
             CheckSummaries(fixture / L"summaries");
             CheckNetworkView(plugin, fixture);
             CheckUnicodeState(fixture / L"unicode");
+            CheckIntegerFormatting();
+            CheckPausedCheckpoint(plugin, fixture / L"paused-checkpoint");
         }
         CloseHandle(iconGate);
         return 0;

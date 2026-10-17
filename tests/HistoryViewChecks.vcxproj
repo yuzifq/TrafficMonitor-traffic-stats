@@ -41,6 +41,10 @@
   <ItemGroup>
     <ClCompile Include="HistoryViewChecks.cpp" />
     <ClCompile Include="..\ProcessTrafficPlugin\EtwProcNetCollector.cpp" />
+    <ClCompile Include="..\ProcessTrafficPlugin\HybridTrafficCollector.cpp" />
+    <ClCompile Include="..\ProcessTrafficPlugin\TcpEStatsCollector.cpp" />
+    <ClCompile Include="..\ProcessTrafficPlugin\TcpProofCollector.cpp" />
+    <ClCompile Include="..\ProcessTrafficPlugin\TcpSourceTracker.cpp" />
     <ClCompile Include="..\ProcessTrafficPlugin\HistoryTrafficStore.cpp" />
     <ClCompile Include="..\ProcessTrafficPlugin\NetworkTrafficCollector.cpp" />
     <ClCompile Include="..\ProcessTrafficPlugin\NetworkTrafficStore.cpp" />

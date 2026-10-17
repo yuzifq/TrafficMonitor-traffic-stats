@@ -84,11 +84,18 @@
       <OptimizeReferences>true</OptimizeReferences>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
       <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateMapFile>true</GenerateMapFile>
+      <MapFileName>$(IntDir)ProcessTrafficPlugin.map</MapFileName>
       <AdditionalDependencies>advapi32.lib;tdh.lib;comctl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="EtwProcNetCollector.h" />
+    <ClInclude Include="HybridTrafficCollector.h" />
+    <ClInclude Include="TcpEStatsCollector.h" />
+    <ClInclude Include="TcpProofCollector.h" />
+    <ClInclude Include="TcpSourceTracker.h" />
+    <ClInclude Include="TrafficTypes.h" />
     <ClInclude Include="HistoryTrafficStore.h" />
     <ClInclude Include="NetworkTrafficCollector.h" />
     <ClInclude Include="NetworkTrafficStore.h" />
@@ -101,6 +108,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="EtwProcNetCollector.cpp" />
+    <ClCompile Include="HybridTrafficCollector.cpp" />
+    <ClCompile Include="TcpEStatsCollector.cpp" />
+    <ClCompile Include="TcpProofCollector.cpp" />
+    <ClCompile Include="TcpSourceTracker.cpp" />
     <ClCompile Include="HistoryTrafficStore.cpp" />
     <ClCompile Include="NetworkTrafficCollector.cpp" />
     <ClCompile Include="NetworkTrafficStore.cpp" />
@@ -112,5 +123,8 @@
     <ClCompile Include="Utils.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="VerifyReleaseDllSize" AfterTargets="Build" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Exec Command="powershell.exe -NoProfile -File &quot;$(ProjectDir)..\tools\VerifyReleaseDll.ps1&quot; -Path &quot;$(TargetPath)&quot;" />
+  </Target>
   <ImportGroup Label="ExtensionTargets" />
 </Project>

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cwchar>
 #include <utility>
+#include <vector>
 
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "tdh.lib")
@@ -57,9 +58,7 @@ CEtwProcNetCollector::CEtwProcNetCollector()
       m_sessionGuid(SYSTEM_TRACE_CONTROL_GUID),
       m_sessionHandle(0),
       m_traceHandle(INVALID_PROCESSTRACE_HANDLE),
-      m_ownsSession(false),
-      m_lastSampleTick(GetTickCount64()),
-      m_sampleSequence(0)
+      m_ownsSession(false)
 {
 }
 
@@ -75,14 +74,22 @@ bool CEtwProcNetCollector::Start()
     {
         return true;
     }
+    if (m_thread.joinable()) m_thread.join();
 
     {
         std::lock_guard<std::mutex> lock(m_rateMutex);
-        m_snapshotByPid.clear();
-        m_lastRxTotalByPid.clear();
-        m_lastTxTotalByPid.clear();
-        m_lastSampleTick = GetTickCount64();
-        m_sampleSequence = 0;
+        m_diagnostics = {};
+        m_hasLossBaseline = false;
+        LARGE_INTEGER before{}, after{}, frequency{};
+        QueryPerformanceFrequency(&frequency);
+        QueryPerformanceCounter(&before);
+        FILETIME utc{};
+        GetSystemTimePreciseAsFileTime(&utc);
+        QueryPerformanceCounter(&after);
+        m_startFileTime = (static_cast<Traffic::U64>(utc.dwHighDateTime) << 32) | utc.dwLowDateTime;
+        m_startCounter = before.QuadPart + (after.QuadPart - before.QuadPart) / 2;
+        m_counterFrequency = frequency.QuadPart;
+        m_timestampClock = 0;
     }
     UpdateStatus(L"Starting ETW session...");
 
@@ -92,14 +99,12 @@ bool CEtwProcNetCollector::Start()
 
 void CEtwProcNetCollector::Stop()
 {
-    if (!m_running.exchange(false))
-    {
-        return;
-    }
+    m_running.store(false);
 
-    if (m_traceHandle != 0 && m_traceHandle != INVALID_PROCESSTRACE_HANDLE)
+    const auto trace = m_traceHandle.exchange(INVALID_PROCESSTRACE_HANDLE);
+    if (trace != 0 && trace != INVALID_PROCESSTRACE_HANDLE)
     {
-        CloseTrace(m_traceHandle);
+        CloseTrace(trace);
     }
 
     if (m_thread.joinable())
@@ -111,16 +116,46 @@ void CEtwProcNetCollector::Stop()
     UpdateStatus(L"Stopped");
 }
 
-std::unordered_map<DWORD, CEtwProcNetCollector::ProcessTrafficSnapshot> CEtwProcNetCollector::GetProcessTrafficSnapshot() const
-{
-    std::lock_guard<std::mutex> lock(m_rateMutex);
-    return m_snapshotByPid;
-}
-
 std::wstring CEtwProcNetCollector::GetStatusText() const
 {
     std::lock_guard<std::mutex> lock(m_statusMutex);
     return m_statusText;
+}
+
+void CEtwProcNetCollector::SetEventSink(EventSink sink, void* context)
+{
+    if (m_running.load()) return;
+    m_eventSink = sink;
+    m_eventContext = context;
+}
+
+CEtwProcNetCollector::Diagnostics CEtwProcNetCollector::GetDiagnostics() const
+{
+    std::vector<unsigned char> storage(sizeof(EVENT_TRACE_PROPERTIES) + 4096);
+    auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(storage.data());
+    properties->Wnode.BufferSize = static_cast<ULONG>(storage.size());
+    properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
+    const auto error = ControlTraceW(0, m_sessionName.c_str(), properties, EVENT_TRACE_CONTROL_QUERY);
+    std::lock_guard<std::mutex> lock(m_rateMutex);
+    m_diagnostics.queryError = error;
+    if (error == ERROR_SUCCESS)
+    {
+        if (!m_hasLossBaseline)
+        {
+            m_initialEventsLost = properties->EventsLost;
+            m_initialBuffersLost = properties->RealTimeBuffersLost;
+            m_hasLossBaseline = true;
+        }
+        if (properties->EventsLost < m_initialEventsLost || properties->RealTimeBuffersLost < m_initialBuffersLost)
+            ++m_diagnostics.sessionResets;
+        m_diagnostics.eventsLost += properties->EventsLost >= m_initialEventsLost ? properties->EventsLost - m_initialEventsLost : properties->EventsLost;
+        m_diagnostics.realtimeBuffersLost += properties->RealTimeBuffersLost >= m_initialBuffersLost ? properties->RealTimeBuffersLost - m_initialBuffersLost : properties->RealTimeBuffersLost;
+        m_initialEventsLost = properties->EventsLost;
+        m_initialBuffersLost = properties->RealTimeBuffersLost;
+        m_diagnostics.sessionFlags = properties->EnableFlags;
+        m_diagnostics.clockType = properties->Wnode.ClientContext;
+    }
+    return m_diagnostics;
 }
 
 bool CEtwProcNetCollector::StartTraceSession()
@@ -138,6 +173,8 @@ bool CEtwProcNetCollector::StartTraceSession()
     properties->Wnode.Guid = m_sessionGuid;
     properties->LogFileMode = EVENT_TRACE_REAL_TIME_MODE | EVENT_TRACE_SYSTEM_LOGGER_MODE;
     properties->EnableFlags = EVENT_TRACE_FLAG_NETWORK_TCPIP;
+    properties->BufferSize = 64;
+    properties->FlushTimer = 1;
 #ifdef EVENT_TRACE_FLAG_NETWORK_UDPIP
     properties->EnableFlags |= EVENT_TRACE_FLAG_NETWORK_UDPIP;
 #endif
@@ -151,11 +188,10 @@ bool CEtwProcNetCollector::StartTraceSession()
         m_ownsSession = false;
         UpdateStatus(L"NT Kernel Logger already exists. Reusing existing session.");
     }
+
     else if (status != ERROR_SUCCESS)
     {
-        wchar_t buffer[96]{};
-        swprintf_s(buffer, L"StartTrace failed: %lu", status);
-        UpdateStatus(buffer);
+        UpdateStatus(L"StartTrace failed: " + std::to_wstring(status));
         return false;
     }
     else
@@ -164,9 +200,18 @@ bool CEtwProcNetCollector::StartTraceSession()
         UpdateStatus(L"ETW session started.");
     }
 
+    const auto session = GetDiagnostics();
+    if (session.queryError || !(session.sessionFlags & EVENT_TRACE_FLAG_NETWORK_TCPIP) ||
+        (session.clockType != 1 && session.clockType != 2))
+    {
+        UpdateStatus(L"ETW session error: no network events or unsupported clock.");
+        StopTraceSession();
+        return false;
+    }
+    m_timestampClock = session.clockType;
     EVENT_TRACE_LOGFILEW log_file{};
     log_file.LoggerName = const_cast<LPWSTR>(m_sessionName.c_str());
-    log_file.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
+    log_file.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
     log_file.EventRecordCallback = &CEtwProcNetCollector::StaticEventRecordCallback;
     log_file.Context = this;
 
@@ -174,9 +219,7 @@ bool CEtwProcNetCollector::StartTraceSession()
     if (m_traceHandle == INVALID_PROCESSTRACE_HANDLE)
     {
         const auto error = GetLastError();
-        wchar_t buffer[96]{};
-        swprintf_s(buffer, L"OpenTrace failed: %lu", error);
-        UpdateStatus(buffer);
+        UpdateStatus(L"OpenTrace failed: " + std::to_wstring(error));
         StopTraceSession();
         return false;
     }
@@ -186,10 +229,8 @@ bool CEtwProcNetCollector::StartTraceSession()
 
 void CEtwProcNetCollector::StopTraceSession()
 {
-    if (m_traceHandle != 0 && m_traceHandle != INVALID_PROCESSTRACE_HANDLE)
-    {
-        m_traceHandle = INVALID_PROCESSTRACE_HANDLE;
-    }
+    const auto trace = m_traceHandle.exchange(INVALID_PROCESSTRACE_HANDLE);
+    if (trace != 0 && trace != INVALID_PROCESSTRACE_HANDLE) CloseTrace(trace);
 
     if (m_ownsSession && m_sessionHandle != 0 && m_propertiesBuffer)
     {
@@ -202,36 +243,6 @@ void CEtwProcNetCollector::StopTraceSession()
     m_propertiesBuffer.reset();
 }
 
-void CEtwProcNetCollector::SampleTraffic()
-{
-    std::lock_guard<std::mutex> lock(m_rateMutex);
-
-    const auto now = GetTickCount64();
-    const auto elapsed = now - m_lastSampleTick;
-    if (elapsed < 1000)
-    {
-        return;
-    }
-
-    ++m_sampleSequence;
-    for (auto& entry : m_snapshotByPid)
-    {
-        const auto last_rx = m_lastRxTotalByPid[entry.first];
-        const auto last_tx = m_lastTxTotalByPid[entry.first];
-        const auto rx_delta = entry.second.rxTotalBytes >= last_rx ? entry.second.rxTotalBytes - last_rx : 0;
-        const auto tx_delta = entry.second.txTotalBytes >= last_tx ? entry.second.txTotalBytes - last_tx : 0;
-        entry.second.rxBytesPerSec = (rx_delta * 1000ULL) / elapsed;
-        entry.second.txBytesPerSec = (tx_delta * 1000ULL) / elapsed;
-        entry.second.rxSampleBytes = rx_delta;
-        entry.second.txSampleBytes = tx_delta;
-        entry.second.sampleSequence = m_sampleSequence;
-        m_lastRxTotalByPid[entry.first] = entry.second.rxTotalBytes;
-        m_lastTxTotalByPid[entry.first] = entry.second.txTotalBytes;
-    }
-
-    m_lastSampleTick = now;
-}
-
 void CEtwProcNetCollector::WorkerLoop()
 {
     if (!StartTraceSession())
@@ -240,15 +251,16 @@ void CEtwProcNetCollector::WorkerLoop()
         return;
     }
 
-    const auto status = ProcessTrace(&m_traceHandle, 1, nullptr, nullptr);
+    GetDiagnostics();
+    auto trace = m_traceHandle.load();
+    const auto status = m_running.load() ? ProcessTrace(&trace, 1, nullptr, nullptr) : ERROR_CANCELLED;
     if (m_running.load())
     {
-        wchar_t buffer[96]{};
-        swprintf_s(buffer, L"ProcessTrace ended: %lu", status);
-        UpdateStatus(buffer);
+        UpdateStatus(L"ProcessTrace ended: " + std::to_wstring(status));
     }
 
     StopTraceSession();
+    m_running.store(false);
 }
 
 void CEtwProcNetCollector::HandleEventRecord(_EVENT_RECORD* event_record)
@@ -263,11 +275,23 @@ void CEtwProcNetCollector::HandleEventRecord(_EVENT_RECORD* event_record)
     {
         return;
     }
+    bool before_start{};
+    const auto event_time = EventTime(static_cast<Traffic::U64>(event_record->EventHeader.TimeStamp.QuadPart), before_start);
+    if (before_start)
+    {
+        std::lock_guard<std::mutex> lock(m_rateMutex);
+        ++m_diagnostics.bufferedBeforeStart;
+        if (!m_reportRejected) return;
+    }
 
     const auto opcode = event_record->EventHeader.EventDescriptor.Opcode;
     const bool is_send = opcode == EVENT_TRACE_TYPE_SEND_VALUE || opcode == EVENT_TRACE_TYPE_SEND_IPV6_VALUE;
     const bool is_receive = opcode == EVENT_TRACE_TYPE_RECEIVE_VALUE || opcode == EVENT_TRACE_TYPE_RECEIVE_IPV6_VALUE;
-    if (!is_send && !is_receive)
+    const bool is_tcp = IsEqualGUID(provider, TCPIP_PROVIDER_GUID);
+    const bool retransmit = is_tcp && (opcode == 14 || opcode == 30);
+    const bool lifecycle = is_tcp && (opcode == 12 || opcode == 13 || opcode == 15 || opcode == 16 ||
+        opcode == 28 || opcode == 29 || opcode == 31 || opcode == 32);
+    if (!is_send && !is_receive && !((lifecycle || retransmit) && m_eventSink))
     {
         return;
     }
@@ -277,6 +301,8 @@ void CEtwProcNetCollector::HandleEventRecord(_EVENT_RECORD* event_record)
     {
         if (TryGetUInt32Property(event_record, L"ProcessId", process_id) != ERROR_SUCCESS)
         {
+            std::lock_guard<std::mutex> lock(m_rateMutex);
+            ++m_diagnostics.parseFailures;
             return;
         }
     }
@@ -286,37 +312,90 @@ void CEtwProcNetCollector::HandleEventRecord(_EVENT_RECORD* event_record)
     {
         if (TryGetUInt32Property(event_record, L"Size", transfer_size) != ERROR_SUCCESS)
         {
+            std::lock_guard<std::mutex> lock(m_rateMutex);
+            ++m_diagnostics.parseFailures;
             return;
         }
     }
-    if (transfer_size == 0)
+    if (transfer_size == 0 && !lifecycle && !retransmit)
     {
         return;
     }
 
     // Proxy/IPC traffic on loopback does not cross a network adapter.
-    const ULONG address_size = opcode == EVENT_TRACE_TYPE_SEND_IPV6_VALUE ||
-        opcode == EVENT_TRACE_TYPE_RECEIVE_IPV6_VALUE ? 16 : 4;
+    const ULONG address_size = opcode >= 26 ? 16 : 4;
     std::array<unsigned char, 16> source_address{};
     std::array<unsigned char, 16> destination_address{};
     if (TryGetFixedProperty(event_record, L"saddr", source_address.data(), address_size) != ERROR_SUCCESS ||
-        TryGetFixedProperty(event_record, L"daddr", destination_address.data(), address_size) != ERROR_SUCCESS ||
-        IsLoopbackAddress(source_address.data(), address_size) ||
-        IsLoopbackAddress(destination_address.data(), address_size))
+        TryGetFixedProperty(event_record, L"daddr", destination_address.data(), address_size) != ERROR_SUCCESS)
     {
+        std::lock_guard<std::mutex> lock(m_rateMutex);
+        ++m_diagnostics.parseFailures;
         return;
     }
+    if (IsLoopbackAddress(source_address.data(), address_size) || IsLoopbackAddress(destination_address.data(), address_size))
+    {
+        std::lock_guard<std::mutex> lock(m_rateMutex);
+        m_diagnostics.loopbackBytes += transfer_size;
+        if (!m_includeLoopback) return;
+    }
+
+    if (m_eventSink)
+    {
+        Traffic::NetworkEvent event;
+        event.key.pid = process_id;
+        event.key.family = address_size == 16 ? 6 : 4;
+        event.key.protocol = is_tcp ? 6 : 17;
+        event.key.local = source_address;
+        event.key.remote = destination_address;
+        event.timestamp = event_time;
+        event.rawTimestamp = static_cast<Traffic::U64>(event_record->EventHeader.TimeStamp.QuadPart);
+        event.clockType = m_timestampClock;
+        event.bytes = lifecycle ? 0 : transfer_size;
+        event.send = is_send || retransmit;
+        event.opcode = opcode;
+        event.version = event_record->EventHeader.EventDescriptor.Version;
+        event.lifecycle = lifecycle;
+        event.preStart = before_start;
+        event.retransmit = retransmit;
+        event.loopback = IsLoopbackAddress(source_address.data(), address_size) || IsLoopbackAddress(destination_address.data(), address_size);
+        event.hasEndpoints = TryGetFixedProperty(event_record, L"sport", &event.key.localPort, 2) == ERROR_SUCCESS &&
+            TryGetFixedProperty(event_record, L"dport", &event.key.remotePort, 2) == ERROR_SUCCESS;
+        if (is_tcp)
+        {
+            const bool narrow = (event_record->EventHeader.Flags & EVENT_HEADER_FLAG_32_BIT_HEADER) != 0;
+            auto status = TryGetFixedProperty(event_record, L"connid", &event.connectionId, narrow ? 4 : 8);
+            if (!narrow && status == ERROR_INVALID_DATA) TryGetFixedProperty(event_record, L"connid", &event.connectionId, 4);
+            if (m_captureSequence) event.hasSequence = TryGetUInt32Property(event_record, L"seqnum", event.sequence) == ERROR_SUCCESS;
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_rateMutex);
+            if (!event.hasEndpoints) ++m_diagnostics.endpointFailures;
+            if (event.version > 2) ++m_diagnostics.unsupportedVersions;
+            if (retransmit) { ++m_diagnostics.retransmitEvents; m_diagnostics.retransmitBytes += transfer_size; }
+        }
+        m_eventSink(m_eventContext, event);
+    }
+    if (lifecycle || retransmit || before_start) return;
 
     std::lock_guard<std::mutex> lock(m_rateMutex);
-    auto& snapshot = m_snapshotByPid[process_id];
-    if (is_send)
+    ++m_diagnostics.accepted;
+}
+
+Traffic::U64 CEtwProcNetCollector::EventTime(Traffic::U64 raw, bool& before_start) const
+{
+    if (m_timestampClock != 1 || !m_counterFrequency)
     {
-        snapshot.txTotalBytes += transfer_size;
+        before_start = m_startFileTime && raw < m_startFileTime;
+        return raw;
     }
-    else
-    {
-        snapshot.rxTotalBytes += transfer_size;
-    }
+    // Use the same monotonic clock for the startup boundary. ProcessTrace's
+    // session-wide UTC conversion can lag wall time in a long-lived session.
+    before_start = raw < m_startCounter;
+    const auto ticks = before_start ? m_startCounter - raw : raw - m_startCounter;
+    const auto elapsed = ticks / m_counterFrequency * 10000000ULL +
+        ticks % m_counterFrequency * 10000000ULL / m_counterFrequency;
+    return before_start ? (elapsed < m_startFileTime ? m_startFileTime - elapsed : 0) : m_startFileTime + elapsed;
 }
 
 void CEtwProcNetCollector::UpdateStatus(std::wstring status_text)

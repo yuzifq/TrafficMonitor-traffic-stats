@@ -1,4 +1,5 @@
 #include "HistoryTrafficStore.h"
+#include "Utils.h"
 
 #include <Windows.h>
 
@@ -17,6 +18,34 @@
 
 namespace
 {
+std::wstring DisplayAppName(const std::wstring& key, const std::wstring& path = {})
+{
+    if (key.rfind(L"v2:path:", 0) == 0)
+    {
+        const auto& value = path.empty() ? key : path;
+        const auto slash = value.find_last_of(L"\\/");
+        return value.substr(slash == std::wstring::npos ? 8 : slash + 1);
+    }
+    if (key.rfind(L"v2:unknown:", 0) == 0)
+    {
+        const auto end = key.find(L':', 11);
+        return L"PID" + key.substr(11, end == std::wstring::npos ? end : end - 11);
+    }
+    return key;
+}
+
+std::uint64_t MetadataChecksum(std::wstring_view text)
+{
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (const auto ch : text) { hash ^= static_cast<unsigned char>(ch); hash *= 1099511628211ULL; }
+    return hash;
+}
+void FoldCheckpointLine(std::uint64_t& hash, const std::wstring& line)
+{
+    hash ^= MetadataChecksum(line);
+    hash *= 1099511628211ULL;
+}
+
 using ExportBucketMap = std::map<std::wstring, std::map<std::wstring, CHistoryTrafficStore::TrafficAmount>>;
 
 enum class SummaryKind
@@ -241,17 +270,6 @@ bool ReadDecimalAmount(TabReader& stream, CHistoryTrafficStore::TrafficAmount& a
 
 bool ReadUtf8Line(std::ifstream& input, std::wstring& line);
 void WriteUtf8Line(std::ofstream& output, const std::wstring& line);
-
-bool WriteDailyHistoryEntry(
-    std::ofstream& output,
-    const std::wstring& time_key,
-    std::uint64_t app_id,
-    const CHistoryTrafficStore::TrafficAmount& amount)
-{
-    WriteUtf8Line(output, time_key + L'\t' + FormatStoredAppId(app_id) + L'\t' +
-        FormatStoredAppId(amount.rxBytes) + L'\t' + FormatStoredAppId(amount.txBytes));
-    return static_cast<bool>(output);
-}
 
 bool TryParseDateKey(const std::wstring& text, SYSTEMTIME& date);
 std::filesystem::path DailyHistoryPath(const std::wstring& history_root, const SYSTEMTIME& date);
@@ -550,38 +568,61 @@ void WriteUtf8PathEntry(std::ofstream& output, const std::wstring& app_name, con
     WriteUtf8Line(output, L"path\t" + SanitizeTsvField(app_name) + L"\t" + SanitizeTsvField(exe_path));
 }
 
-bool ReadCommittedMinute(const std::wstring& path, std::wstring& minute)
+bool ReadCommittedMinute(const std::wstring& path, std::wstring& minute, std::uint64_t* transaction)
 {
     if (path.empty() || !std::filesystem::exists(path))
     {
         return false;
     }
     std::ifstream input{ std::filesystem::path(path), std::ios::binary };
-    return ReadUtf8Line(input, minute);
+    std::wstring line, id;
+    if (!ReadUtf8Line(input, line)) return false;
+    TabReader fields(line);
+    if (!ReadTabField(fields, minute)) return false;
+    *transaction = 0;
+    if (ReadTabField(fields, id))
+    {
+        std::wstring checksum;
+        std::uint64_t expected{};
+        if (!TryParseUInt64(id, *transaction) || !ReadTabField(fields, checksum) || !TryParseUInt64(checksum, expected) ||
+            expected != MetadataChecksum(minute + L"\t" + id)) return false;
+    }
+    return true;
+}
+
+bool WriteCommittedMinute(const std::wstring& path, const std::wstring& minute, std::uint64_t transaction)
+{
+    const auto temporary = path + L".new";
+    std::ofstream output{ std::filesystem::path(temporary), std::ios::binary | std::ios::trunc };
+    const auto text = minute + L"\t" + std::to_wstring(transaction);
+    WriteUtf8Line(output, text + L"\t" + std::to_wstring(MetadataChecksum(text)));
+    output.flush();
+    output.close();
+    return output && MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
 }
 
 std::wstring FormatDateKey(const SYSTEMTIME& time)
 {
-    wchar_t buffer[16]{};
-    swprintf_s(buffer, L"%04u-%02u-%02u", time.wYear, time.wMonth, time.wDay);
-    return buffer;
+    return Utils::FormatDate(time);
 }
 
 bool TryParseDateKey(const std::wstring& text, SYSTEMTIME& date)
 {
-    date = {};
-    if (text.size() != 10 || swscanf_s(text.c_str(), L"%hu-%hu-%hu", &date.wYear, &date.wMonth, &date.wDay) != 3)
+    if (text.size() != 10 || text[4] != L'-' || text[7] != L'-') return false;
+    std::uint64_t year{}, month{}, day{};
+    const std::wstring_view fields(text);
+    if (!TryParseUInt64(fields.substr(0, 4), year) || !TryParseUInt64(fields.substr(5, 2), month) ||
+        !TryParseUInt64(fields.substr(8, 2), day))
     {
         return false;
     }
-    SYSTEMTIME normalized = date;
-    normalized.wHour = 0;
-    normalized.wMinute = 0;
-    normalized.wSecond = 0;
-    normalized.wMilliseconds = 0;
+    SYSTEMTIME normalized{};
+    normalized.wYear = static_cast<WORD>(year);
+    normalized.wMonth = static_cast<WORD>(month);
+    normalized.wDay = static_cast<WORD>(day);
     FILETIME file_time{};
     if (SystemTimeToFileTime(&normalized, &file_time) == FALSE ||
-        date.wMonth < 1 || date.wMonth > 12 || date.wDay < 1 || date.wDay > 31)
+        month < 1 || month > 12 || day < 1 || day > 31)
     {
         return false;
     }
@@ -610,6 +651,126 @@ bool AddDays(SYSTEMTIME& date, int days)
     file_time.dwLowDateTime = value.LowPart;
     file_time.dwHighDateTime = value.HighPart;
     return FileTimeToSystemTime(&file_time, &date) != FALSE;
+}
+
+struct RawAppendHeader
+{
+    std::uint64_t magic, offset, length, dataHash, anchorHash, allRx, allTx, cutover, firstEvent, lastEvent, transaction;
+    DWORD volume, indexHigh, indexLow, date, minute, sources, confidence;
+    std::uint64_t headerHash;
+};
+constexpr std::uint64_t kAppendMagic = 0x3230444e50414d54ULL;
+constexpr std::size_t kMaxAppendBytes = 16 * 1024 * 1024;
+struct ManagedFile
+{
+    HANDLE value{ INVALID_HANDLE_VALUE };
+    ~ManagedFile() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+};
+std::uint64_t HashBytes(const void* data, std::size_t size)
+{
+    auto* bytes = static_cast<const unsigned char*>(data);
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (std::size_t i = 0; i < size; ++i) { hash ^= bytes[i]; hash *= 1099511628211ULL; }
+    return hash;
+}
+std::filesystem::path AppendJournalPath(const std::wstring& root)
+{
+    return std::filesystem::path(root) / L"append.pending";
+}
+bool WriteBytes(HANDLE file, const void* data, std::size_t size)
+{
+    const auto* bytes = static_cast<const char*>(data);
+    while (size)
+    {
+        DWORD written{};
+        const auto part = static_cast<DWORD>((std::min)(size, std::size_t(1024 * 1024)));
+        if (!WriteFile(file, bytes, part, &written, nullptr) || !written) return false;
+        bytes += written; size -= written;
+    }
+    return true;
+}
+bool ReadBytesAt(HANDLE file, std::uint64_t at, void* data, DWORD size)
+{
+    LARGE_INTEGER offset{};
+    offset.QuadPart = static_cast<LONGLONG>(at);
+    DWORD read{};
+    return SetFilePointerEx(file, offset, nullptr, FILE_BEGIN) && ReadFile(file, data, size, &read, nullptr) && read == size;
+}
+bool AnchorHash(HANDLE file, std::uint64_t offset, std::uint64_t& hash)
+{
+    std::array<char, 128> bytes{};
+    const auto size = static_cast<DWORD>((std::min)(offset, static_cast<std::uint64_t>(bytes.size())));
+    if (size && !ReadBytesAt(file, offset - size, bytes.data(), size)) return false;
+    hash = HashBytes(bytes.data(), size);
+    return true;
+}
+bool WriteAppendJournal(const std::wstring& root, RawAppendHeader header, const std::string& block)
+{
+    const auto path = AppendJournalPath(root);
+    auto temporary = path;
+    temporary += L".new";
+    header.magic = kAppendMagic;
+    header.length = block.size();
+    header.dataHash = HashBytes(block.data(), block.size());
+    header.headerHash = HashBytes(&header, offsetof(RawAppendHeader, headerHash));
+    {
+        ManagedFile file;
+        file.value = CreateFileW(temporary.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+        if (file.value == INVALID_HANDLE_VALUE || !WriteBytes(file.value, &header, sizeof(header)) ||
+            !WriteBytes(file.value, block.data(), block.size()) || !FlushFileBuffers(file.value)) return false;
+    }
+    return MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+}
+bool ReadAppendJournal(const std::wstring& root, RawAppendHeader& header, std::string& block)
+{
+    std::ifstream input(AppendJournalPath(root), std::ios::binary);
+    if (!input.read(reinterpret_cast<char*>(&header), sizeof(header)) || header.magic != kAppendMagic ||
+        header.headerHash != HashBytes(&header, offsetof(RawAppendHeader, headerHash)) ||
+        !header.length || !header.transaction || header.length > kMaxAppendBytes || header.offset > UINT64_MAX - header.length ||
+        header.minute >= 1440 || header.sources > 3 || header.confidence > 7) return false;
+    block.resize(static_cast<std::size_t>(header.length));
+    return input.read(block.data(), static_cast<std::streamsize>(block.size())) && input.peek() == EOF &&
+        header.dataHash == HashBytes(block.data(), block.size());
+}
+bool CompleteRawAppend(const std::wstring& root, const RawAppendHeader& header, const std::string& block)
+{
+    SYSTEMTIME date{};
+    date.wYear = static_cast<WORD>(header.date >> 16);
+    date.wMonth = static_cast<WORD>((header.date >> 8) & 255);
+    date.wDay = static_cast<WORD>(header.date & 255);
+    FILETIME valid{};
+    if (!SystemTimeToFileTime(&date, &valid) || date.wYear < 1601 || date.wYear > 9999) return false;
+    const auto path = DailyHistoryPath(root, date);
+    ManagedFile file;
+    file.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+    if (file.value == INVALID_HANDLE_VALUE) return false;
+    BY_HANDLE_FILE_INFORMATION identity{};
+    LARGE_INTEGER size{};
+    std::uint64_t anchor{};
+    if (!GetFileInformationByHandle(file.value, &identity) || !GetFileSizeEx(file.value, &size) || size.QuadPart < 0 ||
+        identity.dwVolumeSerialNumber != header.volume || identity.nFileIndexHigh != header.indexHigh || identity.nFileIndexLow != header.indexLow ||
+        static_cast<std::uint64_t>(size.QuadPart) < header.offset ||
+        static_cast<std::uint64_t>(size.QuadPart) > header.offset + header.length ||
+        !AnchorHash(file.value, header.offset, anchor) || anchor != header.anchorHash)
+        return false;
+    const auto present = (std::min)(header.length, static_cast<std::uint64_t>(size.QuadPart) - header.offset);
+    std::array<char, 4096> bytes{};
+    for (std::uint64_t at = 0; at < present;)
+    {
+        const auto part = static_cast<DWORD>((std::min)(static_cast<std::uint64_t>(bytes.size()), present - at));
+        if (!ReadBytesAt(file.value, header.offset + at, bytes.data(), part) ||
+            std::memcmp(bytes.data(), block.data() + at, part) != 0) return false;
+        at += part;
+    }
+    if (present < header.length)
+    {
+        LARGE_INTEGER zero{};
+        if (!SetFilePointerEx(file.value, zero, nullptr, FILE_END) ||
+            !WriteBytes(file.value, block.data() + present, static_cast<std::size_t>(header.length - present))) return false;
+    }
+    return FlushFileBuffers(file.value) != FALSE;
 }
 
 int DaysInMonth(unsigned short year, unsigned short month)
@@ -681,9 +842,7 @@ std::filesystem::path YearDirectory(const std::wstring& history_root, unsigned s
 
 std::filesystem::path MonthDirectory(const std::wstring& history_root, unsigned short year, unsigned short month)
 {
-    wchar_t month_text[3]{};
-    swprintf_s(month_text, L"%02u", month);
-    return YearDirectory(history_root, year) / month_text;
+    return YearDirectory(history_root, year) / Utils::PaddedNumber(month, 2);
 }
 
 std::filesystem::path DailyHistoryPath(const std::wstring& history_root, const SYSTEMTIME& date)
@@ -698,15 +857,13 @@ std::filesystem::path DaySummaryPath(const std::wstring& history_root, const SYS
 
 std::filesystem::path MonthSummaryPath(const std::wstring& history_root, const SYSTEMTIME& date)
 {
-    wchar_t name[32]{};
-    swprintf_s(name, L"%04u-%02u.month.tsv", date.wYear, date.wMonth);
+    const auto name = Utils::PaddedNumber(date.wYear, 4) + L"-" + Utils::PaddedNumber(date.wMonth, 2) + L".month.tsv";
     return MonthDirectory(history_root, date.wYear, date.wMonth) / name;
 }
 
 std::filesystem::path QuarterSummaryPath(const std::wstring& history_root, const SYSTEMTIME& date)
 {
-    wchar_t name[32]{};
-    swprintf_s(name, L"%04u-Q%u.quarter.tsv", date.wYear, (date.wMonth - 1) / 3 + 1);
+    const auto name = Utils::PaddedNumber(date.wYear, 4) + L"-Q" + std::to_wstring((date.wMonth - 1) / 3 + 1) + L".quarter.tsv";
     return YearDirectory(history_root, date.wYear) / name;
 }
 
@@ -722,8 +879,7 @@ std::filesystem::path WeekSummaryPath(const std::wstring& history_root, const SY
     AddDays(first_monday, -((DayOfWeek(january_fourth) + 6) % 7));
     const auto distance = SystemTimeValue(monday) - SystemTimeValue(first_monday);
     const auto week = static_cast<unsigned int>(distance / kFileTimePerDay / 7 + 1);
-    wchar_t name[32]{};
-    swprintf_s(name, L"%04u-W%02u.week.tsv", thursday.wYear, week);
+    const auto name = Utils::PaddedNumber(thursday.wYear, 4) + L"-W" + Utils::PaddedNumber(week, 2) + L".week.tsv";
     return MonthDirectory(history_root, monday.wYear, monday.wMonth) / name;
 }
 
@@ -1105,15 +1261,7 @@ bool ReadTmhRange(
                     }
                     if (records_by_minute != nullptr)
                     {
-                        wchar_t bucket_key[32]{};
-                        swprintf_s(
-                            bucket_key,
-                            L"%04u-%02u-%02u %02u:%02u",
-                            minute_time.wYear,
-                            minute_time.wMonth,
-                            minute_time.wDay,
-                            minute_time.wHour,
-                            minute_time.wMinute);
+                        const auto bucket_key = Utils::FormatDateTime(minute_time);
                         AddAmount(archive_records[bucket_key][app_name], amount);
                     }
                 }
@@ -1253,15 +1401,7 @@ bool StreamTmhRange(
                 }
                 if (selected)
                 {
-                    wchar_t bucket[32]{};
-                    swprintf_s(
-                        bucket,
-                        L"%04u-%02u-%02u %02u:%02u",
-                        minute_time.wYear,
-                        minute_time.wMonth,
-                        minute_time.wDay,
-                        minute_time.wHour,
-                        minute_time.wMinute);
+                    const auto bucket = Utils::FormatDateTime(minute_time);
                     if (!callback(bucket, metadata.appNames[static_cast<std::size_t>(app_id)], MakeAmount(rx, tx)))
                     {
                         return false;
@@ -1317,7 +1457,8 @@ void CHistoryTrafficStore::Initialize(const std::wstring& base_dir)
     m_bucketTimeRangeByKey.clear();
     m_currentMinuteKey.clear();
     m_currentMinuteTotals.clear();
-    m_currentMinuteAppendUncertain = false;
+    m_currentCommitId = 0;
+    m_legacyCheckpoint = m_checkpointBlocked = false;
     m_lastCheckpointTick = 0;
     m_appIdByName.clear();
     m_appNameById.clear();
@@ -1326,6 +1467,9 @@ void CHistoryTrafficStore::Initialize(const std::wstring& base_dir)
     m_historyMigrationFormat = 0;
     m_allTimeRecoveryFormat = 0;
     m_hasPersistedAllTime = false;
+    m_checkpointDirty = m_stateDirty = false;
+    m_writeHealthy = true;
+    m_engine = m_currentEngine = {};
     InvalidateCaches();
 }
 
@@ -1335,22 +1479,26 @@ std::wstring CHistoryTrafficStore::GetStorageDirectory() const
     return m_baseDir;
 }
 
-void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
+bool CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
 {
     EnsureLoaded();
+    if (!m_loaded) return false;
     const auto bucket_key = GetCurrentMinuteKey();
     if (!m_currentMinuteKey.empty() && m_currentMinuteKey != bucket_key && !FlushCurrentMinute())
     {
-        return;
+        m_writeHealthy = false;
+        return false;
     }
     if (m_currentMinuteKey.empty())
     {
         m_currentMinuteKey = bucket_key;
-        m_currentMinuteAppendUncertain = false;
+        m_currentCommitId = 0;
+        m_legacyCheckpoint = false;
     }
+    if (!EnsureCommitId()) { m_writeHealthy = false; return false; }
     if (!EnsureBucketTimeRange(bucket_key))
     {
-        return;
+        return false;
     }
 
     auto& bucket = m_bucketByApp[bucket_key];
@@ -1361,13 +1509,31 @@ void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
 
     for (const auto& app : apps)
     {
-        const auto app_name = SanitizeTsvField(app.appName);
+        const auto app_name = SanitizeTsvField(app.identity.empty() ? app.appName : L"v2:" + app.identity);
         const auto exe_path = SanitizeTsvField(app.exePath);
         if (app_name.empty())
         {
             continue;
         }
         const auto delta = MakeAmount(app.rxTotalBytes, app.txTotalBytes);
+        if (!app.identity.empty())
+        {
+            const bool valid_time = app.sampleStart && app.sampleEnd >= app.sampleStart;
+            if (valid_time && (!m_engine.cutover || app.sampleStart < m_engine.cutover))
+            {
+                m_engine.cutover = app.sampleStart;
+                state_dirty = true;
+            }
+            if (valid_time)
+            {
+                m_currentEngine.firstEvent = !m_currentEngine.firstEvent ? app.sampleStart : (std::min)(m_currentEngine.firstEvent, app.sampleStart);
+                m_currentEngine.lastEvent = (std::max)(m_currentEngine.lastEvent, app.sampleEnd);
+            }
+            m_currentEngine.sources |= 1u << static_cast<unsigned>(app.source);
+            m_currentEngine.confidence |= 1u << static_cast<unsigned>(app.confidence);
+            if (!valid_time) m_currentEngine.confidence |= 4;
+            m_checkpointDirty = true;
+        }
 
         if (delta.rxBytes != 0 || delta.txBytes != 0)
         {
@@ -1399,6 +1565,7 @@ void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
 
     if (history_dirty)
     {
+        m_checkpointDirty = true;
         InvalidateRangeCache();
         if (m_allTimeCacheValid)
         {
@@ -1410,22 +1577,115 @@ void CHistoryTrafficStore::Update(const std::vector<AppTotalEntry>& apps)
         InvalidateRangeCache();
     }
 
+    m_stateDirty |= state_dirty;
+    Checkpoint();
+    return true; // Applied to RAM even if the durable checkpoint needs a retry.
+}
+
+bool CHistoryTrafficStore::Checkpoint(bool force)
+{
+    if (!m_loaded) return false;
     const auto now = GetTickCount64();
-    const bool checkpoint_due = history_dirty &&
-        (state_dirty || m_lastCheckpointTick == 0 || now - m_lastCheckpointTick >= 10000);
-    if (checkpoint_due && !SaveCheckpoint())
+    bool healthy = true;
+    // Leave one scheduler period before the ten-second persistence target.
+    if (m_checkpointDirty && (force || m_stateDirty || m_lastCheckpointTick == 0 || now - m_lastCheckpointTick >= 9000))
     {
-        LogHistoryIoFailure(L"SaveCheckpoint", m_checkpointFilePath, GetLastError());
+        healthy = SaveCheckpoint();
+        if (healthy) { m_checkpointDirty = false; m_stateDirty = true; }
     }
-    if ((state_dirty || checkpoint_due) && !SaveState())
+    if (m_stateDirty)
     {
-        LogHistoryIoFailure(L"SaveState", m_stateFilePath, GetLastError());
+        if (SaveState()) m_stateDirty = false;
+        else healthy = false;
     }
+    m_writeHealthy = healthy;
+    return healthy;
+}
+
+bool CHistoryTrafficStore::AppendEngineMetadata()
+{
+    if ((!m_currentEngine.sources && !m_currentEngine.confidence) || m_currentMinuteKey.size() != 16) return true;
+    SYSTEMTIME date{};
+    if (!TryParseDateKey(m_currentMinuteKey.substr(0, 10), date)) return false;
+    auto path = DailyHistoryPath(m_historyDir, date);
+    path.replace_extension(L".quality.tsv");
+    const auto text = m_currentMinuteKey + L"\t" + std::to_wstring(m_currentEngine.firstEvent) + L"\t" +
+        std::to_wstring(m_currentEngine.lastEvent) + L"\t" + std::to_wstring(m_currentEngine.sources) + L"\t" +
+        std::to_wstring(m_currentEngine.confidence);
+    std::error_code error;
+    const bool empty = !std::filesystem::exists(path, error) || std::filesystem::file_size(path, error) == 0;
+    std::ofstream output(path, std::ios::binary | std::ios::app);
+    if (!output) return false;
+    if (empty) WriteUtf8Line(output, L"quality\t1");
+    output.put('\n'); // Separate a previous interrupted append without interpreting it as valid metadata.
+    WriteUtf8Line(output, text + L"\t" + std::to_wstring(MetadataChecksum(text)));
+    output.flush();
+    return static_cast<bool>(output);
+}
+
+CHistoryTrafficStore::EngineMetadata CHistoryTrafficStore::GetEngineMetadata(const DateTimeRange& range) const
+{
+    const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
+    if (!m_loaded) { auto failed = m_engine; failed.corrupt = true; return failed; }
+    EngineMetadata result;
+    result.cutover = m_engine.cutover;
+    const auto selected = NormalizeRange(range);
+    SYSTEMTIME date = selected.start;
+    date.wHour = date.wMinute = date.wSecond = date.wMilliseconds = 0;
+    const auto add = [&](const std::wstring& minute, const EngineMetadata& metadata) {
+        BucketTimeRange bucket;
+        if (!TryParseBucketTimeRange(minute, bucket) || !BucketIntersectsRange(bucket,
+                ToFileTimeValue(selected.start), ToFileTimeValue(selected.end))) return false;
+        result.sources |= metadata.sources;
+        result.confidence |= metadata.confidence;
+        if (metadata.firstEvent) result.firstEvent = !result.firstEvent ? metadata.firstEvent : (std::min)(result.firstEvent, metadata.firstEvent);
+        result.lastEvent = (std::max)(result.lastEvent, metadata.lastEvent);
+        return true;
+    };
+    std::set<std::wstring> minutes;
+    while (ToFileTimeValue(date) <= ToFileTimeValue(selected.end))
+    {
+        auto path = DailyHistoryPath(m_historyDir, date);
+        path.replace_extension(L".quality.tsv");
+        std::ifstream input(path, std::ios::binary);
+        std::wstring line;
+        while (ReadUtf8Line(input, line))
+        {
+            if (line.empty()) continue;
+            if (line == L"quality\t1") continue;
+            TabReader reader(line);
+            std::wstring minute, field;
+            std::uint64_t values[5]{};
+            bool valid = ReadTabField(reader, minute);
+            for (auto& value : values) valid = valid && ReadTabField(reader, field) && TryParseUInt64(field, value);
+            const auto checksum_at = line.find_last_of(L'\t');
+            if (!valid || checksum_at == std::wstring::npos || values[4] != MetadataChecksum(std::wstring_view(line).substr(0, checksum_at)) ||
+                values[2] > 3 || values[3] > 7 || (values[0] && values[1] < values[0]))
+            {
+                result.corrupt = true;
+                continue;
+            }
+            EngineMetadata metadata;
+            metadata.firstEvent = values[0]; metadata.lastEvent = values[1];
+            metadata.sources = static_cast<unsigned>(values[2]); metadata.confidence = static_cast<unsigned>(values[3]);
+            if (add(minute, metadata)) minutes.insert(minute); // Retries are snapshots, not additional observations.
+        }
+        if (!AddDays(date, 1)) break;
+    }
+    if ((m_currentEngine.sources || m_currentEngine.confidence) && add(m_currentMinuteKey, m_currentEngine))
+    {
+        minutes.insert(m_currentMinuteKey);
+        result.corrupt |= m_currentEngine.corrupt;
+    }
+    for (const auto& app : GetRangeAppTotals(range)) if (app.identity.empty()) { result.legacy = true; break; }
+    result.minutes = minutes.size();
+    return result;
 }
 
 std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeAppTotals(const DateTimeRange& range) const
 {
     const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
+    if (!m_loaded) return {};
     const auto normalized = NormalizeRange(range);
     if (m_rangeCacheValid && IsSameRange(m_cachedRange, normalized))
     {
@@ -1618,6 +1878,11 @@ std::vector<CHistoryTrafficStore::AppTotalEntry> CHistoryTrafficStore::GetRangeA
         {
             item.exePath = path_it->second;
         }
+        if (entry.first.rfind(L"v2:", 0) == 0)
+        {
+            item.identity = entry.first.substr(3);
+            item.appName = DisplayAppName(entry.first, item.exePath);
+        }
         item.rxTotalBytes = entry.second.rxBytes;
         item.txTotalBytes = entry.second.txBytes;
         AddAmount(total, entry.second);
@@ -1643,6 +1908,7 @@ CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::GetRangeTotal(const Da
 CHistoryTrafficStore::TrafficAmount CHistoryTrafficStore::GetAllTimeTotal() const
 {
     const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
+    if (!m_loaded) return m_cachedAllTimeTotal;
     if (m_allTimeCacheValid)
     {
         return m_cachedAllTimeTotal;
@@ -1674,6 +1940,12 @@ bool CHistoryTrafficStore::ExportRange(
     }
 
     const_cast<CHistoryTrafficStore*>(this)->EnsureLoaded();
+    if (!m_loaded) { error_message = L"History append recovery is pending."; return false; }
+    if (Utils::IsProtectedHistoryPath(m_baseDir, output_path))
+    {
+        error_message = L"History data and checkpoints cannot be overwritten by an export.";
+        return false;
+    }
     const auto normalized = NormalizeRange(range);
     const auto target = std::filesystem::path(output_path);
     const auto temporary = std::filesystem::path(output_path + L".tmp");
@@ -1724,8 +1996,10 @@ bool CHistoryTrafficStore::ExportRange(
             output.write(utf8_header.data(), static_cast<std::streamsize>(utf8_header.size()));
             current_bucket = bucket_key;
         }
+        const auto path_it = m_pathByApp.find(app_name);
         const auto utf8_line = WideToUtf8(
-            app_name + L"\t" + std::to_wstring(amount.txBytes) + L"\t" + std::to_wstring(amount.rxBytes) + L"\n");
+            DisplayAppName(app_name, path_it != m_pathByApp.end() ? path_it->second : std::wstring{}) +
+            L"\t" + std::to_wstring(amount.txBytes) + L"\t" + std::to_wstring(amount.rxBytes) + L"\n");
         output.write(utf8_line.data(), static_cast<std::streamsize>(utf8_line.size()));
         wrote_record = static_cast<bool>(output);
         return wrote_record;
@@ -1919,6 +2193,7 @@ CHistoryTrafficStore::DateTimeRange CHistoryTrafficStore::GetPreferredRange() co
 void CHistoryTrafficStore::SetPreferredRange(const DateTimeRange& range)
 {
     EnsureLoaded();
+    if (!m_loaded) return;
     const auto normalized = NormalizeRange(range);
     if (IsSameRange(m_preferredRange, normalized))
     {
@@ -1938,6 +2213,7 @@ CHistoryTrafficStore::DisplayLanguage CHistoryTrafficStore::GetPreferredLanguage
 void CHistoryTrafficStore::SetPreferredLanguage(DisplayLanguage language)
 {
     EnsureLoaded();
+    if (!m_loaded) return;
     if (m_preferredLanguage == language)
     {
         return;
@@ -1968,9 +2244,11 @@ void CHistoryTrafficStore::EnsureLoaded()
 
     LoadState();
     LoadAppDictionary();
+    if (!RecoverAppend()) { m_writeHealthy = false; return; }
     EnsureCompletedSummaries();
     Load();
-    m_loaded = true;
+    m_loaded = !m_checkpointBlocked;
+    if (!m_loaded) m_writeHealthy = false;
 }
 
 bool CHistoryTrafficStore::EnsureCompletedSummaries()
@@ -2287,6 +2565,7 @@ void CHistoryTrafficStore::Load()
         m_allTimeCacheValid = true;
     }
     LoadCheckpoint();
+    if (m_checkpointBlocked) return;
 
     if (!m_hasPersistedAllTime || m_allTimeRecoveryFormat < kCurrentAllTimeRecoveryFormat)
     {
@@ -2683,34 +2962,93 @@ bool CHistoryTrafficStore::AppendHistoryEntries(
     {
         return false;
     }
-    const auto file_path = DailyHistoryPath(m_historyDir, date);
-    std::filesystem::create_directories(file_path.parent_path());
-    std::ofstream output{ file_path, std::ios::binary | std::ios::app };
-    if (!output.is_open())
-    {
-        return false;
-    }
-
+    std::string block;
     bool first_entry = true;
     for (const auto& entry : entries)
     {
         const auto app_id = EnsureAppId(entry.first);
-        if (app_id == kInvalidAppId ||
-            !WriteDailyHistoryEntry(output, first_entry ? time_key : std::wstring{}, app_id, entry.second))
-        {
-            return false;
-        }
+        if (app_id == kInvalidAppId) return false;
+        block += WideToUtf8((first_entry ? time_key : std::wstring{}) + L'\t' + FormatStoredAppId(app_id) + L'\t' +
+            FormatStoredAppId(entry.second.rxBytes) + L'\t' + FormatStoredAppId(entry.second.txBytes)) + '\n';
         first_entry = false;
     }
-    output.flush();
-    return static_cast<bool>(output);
+    if (block.empty() || block.size() > kMaxAppendBytes) return false;
+    const auto packed_date = (static_cast<DWORD>(date.wYear) << 16) | (static_cast<DWORD>(date.wMonth) << 8) | date.wDay;
+    SYSTEMTIME minute{};
+    if (!TryParseStoredTime(bucket_key, minute)) return false;
+    const auto packed_minute = static_cast<DWORD>(minute.wHour) * 60 + minute.wMinute;
+    std::error_code error;
+    if (std::filesystem::exists(AppendJournalPath(m_historyDir), error))
+    {
+        RawAppendHeader previous{};
+        std::string previous_block;
+        if (!ReadAppendJournal(m_historyDir, previous, previous_block) || !RecoverAppend()) return false;
+        if (previous.transaction == m_currentCommitId && previous.date == packed_date && previous.minute == packed_minute && previous_block == block) return true;
+    }
+    const auto file_path = DailyHistoryPath(m_historyDir, date);
+    std::filesystem::create_directories(file_path.parent_path());
+    RawAppendHeader header{};
+    {
+        ManagedFile file;
+        file.value = CreateFileW(file_path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+        if (file.value == INVALID_HANDLE_VALUE) return false;
+        BY_HANDLE_FILE_INFORMATION identity{};
+        LARGE_INTEGER size{};
+        if (!GetFileInformationByHandle(file.value, &identity) || !GetFileSizeEx(file.value, &size) || size.QuadPart < 0) return false;
+        header.offset = static_cast<std::uint64_t>(size.QuadPart);
+        header.volume = identity.dwVolumeSerialNumber; header.indexHigh = identity.nFileIndexHigh; header.indexLow = identity.nFileIndexLow;
+        header.date = packed_date; header.minute = packed_minute;
+        header.allRx = m_cachedAllTimeTotal.rxBytes; header.allTx = m_cachedAllTimeTotal.txBytes;
+        header.transaction = m_currentCommitId;
+        header.cutover = m_engine.cutover;
+        header.firstEvent = m_currentEngine.firstEvent; header.lastEvent = m_currentEngine.lastEvent;
+        header.sources = m_currentEngine.sources; header.confidence = m_currentEngine.confidence;
+        if (!AnchorHash(file.value, header.offset, header.anchorHash) || !WriteAppendJournal(m_historyDir, header, block)) return false;
+    }
+    return RecoverAppend();
+}
+
+bool CHistoryTrafficStore::RecoverAppend()
+{
+    std::error_code error;
+    const auto journal = AppendJournalPath(m_historyDir);
+    if (!std::filesystem::exists(journal, error)) return !error;
+    RawAppendHeader header{};
+    std::string block;
+    if (!ReadAppendJournal(m_historyDir, header, block) || !CompleteRawAppend(m_historyDir, header, block)) return false;
+    const auto original_minute = m_currentMinuteKey;
+    const auto original_metadata = m_currentEngine;
+    SYSTEMTIME minute{};
+    minute.wYear = static_cast<WORD>(header.date >> 16);
+    minute.wMonth = static_cast<WORD>((header.date >> 8) & 255);
+    minute.wDay = static_cast<WORD>(header.date & 255);
+    minute.wHour = static_cast<WORD>(header.minute / 60);
+    minute.wMinute = static_cast<WORD>(header.minute % 60);
+    m_currentMinuteKey = FormatMinuteTime(minute);
+    m_currentEngine = {};
+    m_currentEngine.firstEvent = header.firstEvent; m_currentEngine.lastEvent = header.lastEvent;
+    m_currentEngine.sources = header.sources; m_currentEngine.confidence = header.confidence;
+    const bool metadata_saved = AppendEngineMetadata() &&
+        WriteCommittedMinute(m_checkpointCommitPath, m_currentMinuteKey, header.transaction);
+    m_currentMinuteKey = original_minute;
+    m_currentEngine = original_metadata;
+    if (!metadata_saved) return false;
+    m_cachedAllTimeTotal.rxBytes = (std::max)(m_cachedAllTimeTotal.rxBytes, header.allRx);
+    m_cachedAllTimeTotal.txBytes = (std::max)(m_cachedAllTimeTotal.txBytes, header.allTx);
+    m_allTimeCacheValid = m_hasPersistedAllTime = true;
+    if (header.cutover) m_engine.cutover = !m_engine.cutover ? header.cutover : (std::min)(m_engine.cutover, header.cutover);
+    m_stateDirty = true;
+    return DeleteFileW(journal.c_str()) != FALSE;
 }
 
 void CHistoryTrafficStore::LoadCheckpoint()
 {
     m_currentMinuteKey.clear();
     m_currentMinuteTotals.clear();
-    m_currentMinuteAppendUncertain = false;
+    m_currentCommitId = 0;
+    m_legacyCheckpoint = m_checkpointBlocked = false;
+    m_currentEngine = {};
     if (m_checkpointFilePath.empty() || !std::filesystem::exists(m_checkpointFilePath))
     {
         return;
@@ -2722,6 +3060,9 @@ void CHistoryTrafficStore::LoadCheckpoint()
     BucketAppMap entries;
     std::ifstream input{ std::filesystem::path(m_checkpointFilePath), std::ios::binary };
     std::wstring line;
+    std::uint64_t version{};
+    std::uint64_t hash = 14695981039346656037ULL, expected_hash{};
+    bool has_hash{}, malformed{};
     while (ReadUtf8Line(input, line))
     {
         TabReader stream(line);
@@ -2730,13 +3071,52 @@ void CHistoryTrafficStore::LoadCheckpoint()
         {
             continue;
         }
-        if (type == L"minute")
+        if (type == L"version" || type == L"transaction" || type == L"minute" || type == L"all_time" || type == L"entry")
+            FoldCheckpointLine(hash, line);
+        if (type == L"version")
         {
-            ReadTabField(stream, minute_key);
+            std::wstring value;
+            malformed |= !ReadTabField(stream, value) || !TryParseUInt64(value, version);
+        }
+        else if (type == L"transaction")
+        {
+            std::wstring value;
+            malformed |= !ReadTabField(stream, value) || !TryParseUInt64(value, m_currentCommitId);
+        }
+        else if (type == L"checksum")
+        {
+            std::wstring value;
+            malformed |= has_hash || !ReadTabField(stream, value) || !TryParseUInt64(value, expected_hash);
+            has_hash = true;
+        }
+        else if (type == L"minute")
+        {
+            malformed |= !ReadTabField(stream, minute_key);
         }
         else if (type == L"all_time")
         {
             has_all_time = ReadDecimalAmount(stream, checkpoint_all_time);
+            malformed |= !has_all_time;
+        }
+        else if (type == L"engine_start")
+        {
+            std::wstring value;
+            std::uint64_t start{};
+            if (ReadTabField(stream, value) && TryParseUInt64(value, start) && start)
+                m_engine.cutover = !m_engine.cutover ? start : (std::min)(m_engine.cutover, start);
+        }
+        else if (type == L"engine")
+        {
+            std::uint64_t values[4]{};
+            bool valid = true;
+            std::wstring value;
+            for (auto& item : values) valid = valid && ReadTabField(stream, value) && TryParseUInt64(value, item);
+            if (valid && values[2] <= 3 && values[3] <= 7 && (!values[0] || values[1] >= values[0]))
+            {
+                m_currentEngine.firstEvent = values[0]; m_currentEngine.lastEvent = values[1];
+                m_currentEngine.sources = static_cast<unsigned>(values[2]); m_currentEngine.confidence = static_cast<unsigned>(values[3]);
+            }
+            else { m_currentEngine.corrupt = true; m_currentEngine.confidence = 4; }
         }
         else if (type == L"entry")
         {
@@ -2752,16 +3132,37 @@ void CHistoryTrafficStore::LoadCheckpoint()
                 {
                     AddAmount(entries[app_it->second], amount);
                 }
+                else malformed = true;
             }
+            else malformed = true;
         }
     }
 
+    if (!version || version > 6 || malformed || ((version >= 6 || has_hash) && (!has_hash || hash != expected_hash)))
+    {
+        m_checkpointBlocked = true;
+        return;
+    }
     SYSTEMTIME minute_start{};
     SYSTEMTIME minute_end{};
-    if (entries.empty() || !TryParseBucketKey(minute_key, minute_start, minute_end) || minute_key.size() != 16)
+    if ((entries.empty() && !m_currentEngine.sources && !m_currentEngine.confidence) ||
+        !TryParseBucketKey(minute_key, minute_start, minute_end) || minute_key.size() != 16)
     {
         return;
     }
+    m_legacyCheckpoint = version < 6;
+    if (!m_legacyCheckpoint && (!m_currentCommitId || m_currentCommitId == UINT64_MAX))
+    {
+        m_checkpointBlocked = true;
+        return;
+    }
+    if (!m_currentEngine.sources && !m_currentEngine.confidence)
+        for (const auto& entry : entries) if (entry.first.rfind(L"v2:", 0) == 0)
+        {
+            m_currentEngine.confidence = 4;
+            m_currentEngine.corrupt = true;
+            break;
+        }
 
     if (has_all_time)
     {
@@ -2771,13 +3172,27 @@ void CHistoryTrafficStore::LoadCheckpoint()
     }
 
     std::wstring committed_minute;
+    std::uint64_t committed_id{};
     if (!m_checkpointCommitPath.empty() && std::filesystem::exists(m_checkpointCommitPath))
     {
-        ReadCommittedMinute(m_checkpointCommitPath, committed_minute);
+        if (!ReadCommittedMinute(m_checkpointCommitPath, committed_minute, &committed_id))
+        {
+            m_checkpointBlocked = true;
+            return;
+        }
     }
-    if (committed_minute == minute_key ||
-        DailyHistoryEndsWithBlock(m_historyDir, minute_key, m_appNameById, entries))
+    if ((committed_minute == minute_key && (m_legacyCheckpoint || committed_id == m_currentCommitId)) ||
+        (m_legacyCheckpoint && DailyHistoryEndsWithBlock(m_historyDir, minute_key, m_appNameById, entries)))
     {
+        m_currentMinuteKey = minute_key;
+        if (!AppendEngineMetadata())
+        {
+            m_currentMinuteTotals = entries;
+            m_writeHealthy = false;
+            return;
+        }
+        m_currentMinuteKey.clear();
+        m_currentEngine = {};
         ClearCheckpoint();
         if (!SaveState())
         {
@@ -2788,7 +3203,6 @@ void CHistoryTrafficStore::LoadCheckpoint()
 
     m_currentMinuteKey = minute_key;
     m_currentMinuteTotals = entries;
-    m_currentMinuteAppendUncertain = false;
     EnsureBucketTimeRange(minute_key);
     for (const auto& entry : entries)
     {
@@ -2797,12 +3211,27 @@ void CHistoryTrafficStore::LoadCheckpoint()
     m_lastCheckpointTick = GetTickCount64();
 }
 
+bool CHistoryTrafficStore::EnsureCommitId()
+{
+    if (m_currentCommitId) return m_currentCommitId != UINT64_MAX;
+    std::uint64_t previous{};
+    std::wstring minute;
+    std::error_code error;
+    if (std::filesystem::exists(m_checkpointCommitPath, error) &&
+        !ReadCommittedMinute(m_checkpointCommitPath, minute, &previous)) return false;
+    if (error || previous == UINT64_MAX) return false;
+    m_currentCommitId = (std::max)(Traffic::FileTimeNow(), previous + 1);
+    return m_currentCommitId != UINT64_MAX;
+}
+
 bool CHistoryTrafficStore::SaveCheckpoint()
 {
-    if (m_checkpointFilePath.empty() || m_currentMinuteKey.empty() || m_currentMinuteTotals.empty())
+    if (m_checkpointFilePath.empty() || m_currentMinuteKey.empty() ||
+        (m_currentMinuteTotals.empty() && !m_currentEngine.sources && !m_currentEngine.confidence))
     {
         return false;
     }
+    if (!EnsureCommitId()) return false;
 
     std::vector<std::pair<std::uint64_t, TrafficAmount>> stored_entries;
     stored_entries.reserve(m_currentMinuteTotals.size());
@@ -2823,15 +3252,24 @@ bool CHistoryTrafficStore::SaveCheckpoint()
     {
         return false;
     }
-    WriteUtf8StateLine(output, L"version", 5);
-    WriteUtf8StateLine(output, L"minute", m_currentMinuteKey);
-    WriteUtf8AllTimeEntry(output, m_cachedAllTimeTotal);
+    std::uint64_t hash = 14695981039346656037ULL;
+    const auto write = [&](const std::wstring& text) { FoldCheckpointLine(hash, text); WriteUtf8Line(output, text); };
+    write(L"version\t6");
+    write(L"transaction\t" + std::to_wstring(m_currentCommitId));
+    write(L"minute\t" + m_currentMinuteKey);
+    write(L"all_time\t" + std::to_wstring(m_cachedAllTimeTotal.rxBytes) + L"\t" + std::to_wstring(m_cachedAllTimeTotal.txBytes));
+    if (m_engine.cutover) WriteUtf8Line(output, L"engine_start\t" + std::to_wstring(m_engine.cutover));
+    if (m_currentEngine.sources || m_currentEngine.confidence)
+        WriteUtf8Line(output, L"engine\t" + std::to_wstring(m_currentEngine.firstEvent) + L"\t" +
+            std::to_wstring(m_currentEngine.lastEvent) + L"\t" + std::to_wstring(m_currentEngine.sources) + L"\t" +
+            std::to_wstring(m_currentEngine.confidence));
     for (const auto& entry : stored_entries)
     {
-        WriteUtf8Line(output, L"entry\t" + FormatStoredAppId(entry.first) + L'\t'
+        write(L"entry\t" + FormatStoredAppId(entry.first) + L'\t'
             + FormatStoredAppId(entry.second.rxBytes) + L'\t'
             + FormatStoredAppId(entry.second.txBytes));
     }
+    WriteUtf8Line(output, L"checksum\t" + std::to_wstring(hash));
     output.flush();
     output.close();
     if (!output)
@@ -2852,16 +3290,23 @@ bool CHistoryTrafficStore::SaveCheckpoint()
         return false;
     }
     m_lastCheckpointTick = GetTickCount64();
+    m_checkpointDirty = false;
+    m_stateDirty = true;
+    m_legacyCheckpoint = false;
     return true;
 }
 
 bool CHistoryTrafficStore::FlushCurrentMinute()
 {
-    if (m_currentMinuteKey.empty() || m_currentMinuteTotals.empty())
+    if (!RecoverAppend()) return false;
+    if (m_currentMinuteKey.empty() ||
+        (m_currentMinuteTotals.empty() && !m_currentEngine.sources && !m_currentEngine.confidence))
     {
         m_currentMinuteKey.clear();
         m_currentMinuteTotals.clear();
-        m_currentMinuteAppendUncertain = false;
+        m_currentCommitId = 0;
+        m_legacyCheckpoint = false;
+        m_currentEngine = {};
         ClearCheckpoint();
         return true;
     }
@@ -2881,36 +3326,21 @@ bool CHistoryTrafficStore::FlushCurrentMinute()
         return left.first < right.first;
     });
     std::wstring committed_minute;
+    std::uint64_t committed_id{};
     const bool already_appended =
-        (ReadCommittedMinute(m_checkpointCommitPath, committed_minute) &&
-            committed_minute == m_currentMinuteKey) ||
-        DailyHistoryEndsWithBlock(m_historyDir, m_currentMinuteKey, m_appNameById, m_currentMinuteTotals);
-    if (!already_appended && !AppendHistoryEntries(m_currentMinuteKey, entries))
+        (ReadCommittedMinute(m_checkpointCommitPath, committed_minute, &committed_id) &&
+            committed_minute == m_currentMinuteKey && committed_id == m_currentCommitId);
+    if (!already_appended && !entries.empty() && !AppendHistoryEntries(m_currentMinuteKey, entries))
     {
-        m_currentMinuteAppendUncertain = true;
         if (!SaveCheckpoint())
         {
             LogHistoryIoFailure(L"SaveCheckpoint", m_checkpointFilePath, GetLastError());
         }
         return false;
     }
+    if (!AppendEngineMetadata()) return false;
 
-    const auto commit_temporary = m_checkpointCommitPath + L".new";
-    std::ofstream commit_output{ std::filesystem::path(commit_temporary), std::ios::binary | std::ios::trunc };
-    WriteUtf8Line(commit_output, m_currentMinuteKey);
-    commit_output.flush();
-    commit_output.close();
-    if (!commit_output)
-    {
-        LogHistoryIoFailure(L"WriteMinuteCommit", commit_temporary, GetLastError());
-        std::error_code error;
-        std::filesystem::remove(commit_temporary, error);
-        return false;
-    }
-    if (MoveFileExW(
-            commit_temporary.c_str(),
-            m_checkpointCommitPath.c_str(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE)
+    if (!WriteCommittedMinute(m_checkpointCommitPath, m_currentMinuteKey, m_currentCommitId))
     {
         LogHistoryIoFailure(L"ReplaceMinuteCommit", m_checkpointCommitPath, GetLastError());
         return false;
@@ -2919,12 +3349,17 @@ bool CHistoryTrafficStore::FlushCurrentMinute()
     ClearCheckpoint();
     m_currentMinuteKey.clear();
     m_currentMinuteTotals.clear();
-    m_currentMinuteAppendUncertain = false;
+    m_currentCommitId = 0;
+    m_legacyCheckpoint = false;
+    m_currentEngine = {};
     m_lastCheckpointTick = 0;
     if (!SaveState())
     {
+        m_stateDirty = true;
+        m_writeHealthy = false;
         LogHistoryIoFailure(L"SaveState", m_stateFilePath, GetLastError());
     }
+    else m_stateDirty = false;
     return true;
 }
 
@@ -2977,6 +3412,12 @@ void CHistoryTrafficStore::LoadState()
                     m_preferredLanguage = static_cast<DisplayLanguage>(value);
                 }
             }
+            continue;
+        }
+        if (type == L"engine_start")
+        {
+            std::wstring value;
+            if (ReadTabField(stream, value)) TryParseUInt64(value, m_engine.cutover);
             continue;
         }
 
@@ -3064,6 +3505,12 @@ bool CHistoryTrafficStore::SaveState() const
     }
     WriteUtf8StateLine(output, L"history_format", 8);
     WriteUtf8StateLine(output, L"history_archive_format", 2);
+    if (m_engine.cutover)
+    {
+        WriteUtf8StateLine(output, L"engine_version", 2);
+        WriteUtf8Line(output, L"engine_start\t" + std::to_wstring(m_engine.cutover));
+        WriteUtf8Line(output, L"engine_source\tETW\tEStats-qualified");
+    }
     if (m_historyMigrationFormat > 0)
     {
         WriteUtf8StateLine(output, L"history_migration_format", m_historyMigrationFormat);
@@ -3145,9 +3592,7 @@ std::wstring CHistoryTrafficStore::GetCurrentMinuteKey()
 
 std::wstring CHistoryTrafficStore::FormatMinuteTime(const SYSTEMTIME& time)
 {
-    wchar_t buffer[20]{};
-    swprintf_s(buffer, L"%04u-%02u-%02u %02u:%02u", time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute);
-    return buffer;
+    return Utils::FormatDateTime(time);
 }
 
 std::wstring CHistoryTrafficStore::GetDateKeyFromMinuteKey(const std::wstring& bucket_key)
@@ -3173,17 +3618,16 @@ std::wstring CHistoryTrafficStore::GetTimeKeyFromMinuteKey(const std::wstring& b
 bool CHistoryTrafficStore::TryParseStoredTime(const std::wstring& text, SYSTEMTIME& time)
 {
     SYSTEMTIME parsed{};
-    if (swscanf_s(text.c_str(), L"%hu-%hu-%hu %hu:%hu",
-        &parsed.wYear,
-        &parsed.wMonth,
-        &parsed.wDay,
-        &parsed.wHour,
-        &parsed.wMinute) != 5)
+    if (text.size() != 16 || text[10] != L' ' || text[13] != L':' || !TryParseDateKey(text.substr(0, 10), parsed))
     {
         return false;
     }
-
-    NormalizeSystemTime(parsed);
+    std::uint64_t hour{}, minute{};
+    const std::wstring_view fields(text);
+    if (!TryParseUInt64(fields.substr(11, 2), hour) || !TryParseUInt64(fields.substr(14, 2), minute) || hour > 23 || minute > 59)
+        return false;
+    parsed.wHour = static_cast<WORD>(hour);
+    parsed.wMinute = static_cast<WORD>(minute);
     time = parsed;
     return true;
 }
@@ -3195,10 +3639,7 @@ bool CHistoryTrafficStore::TryParseBucketKey(const std::wstring& bucket_key, SYS
 
     if (bucket_key.size() == 10)
     {
-        if (swscanf_s(bucket_key.c_str(), L"%hu-%hu-%hu",
-            &bucket_start.wYear,
-            &bucket_start.wMonth,
-            &bucket_start.wDay) != 3)
+        if (!TryParseDateKey(bucket_key, bucket_start))
         {
             return false;
         }
@@ -3211,12 +3652,7 @@ bool CHistoryTrafficStore::TryParseBucketKey(const std::wstring& bucket_key, SYS
     }
     else
     {
-        if (swscanf_s(bucket_key.c_str(), L"%hu-%hu-%hu %hu:%hu",
-            &bucket_start.wYear,
-            &bucket_start.wMonth,
-            &bucket_start.wDay,
-            &bucket_start.wHour,
-            &bucket_start.wMinute) != 5)
+        if (!TryParseStoredTime(bucket_key, bucket_start))
         {
             return false;
         }

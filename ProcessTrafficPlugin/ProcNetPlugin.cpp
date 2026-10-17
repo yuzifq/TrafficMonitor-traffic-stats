@@ -16,13 +16,6 @@ namespace
 {
 using LocalizedText = CProcNetPlugin::LocalizedText;
 using TrafficAmount = CHistoryTrafficStore::TrafficAmount;
-CProcNetPlugin* g_pluginInstance = nullptr;
-
-struct ProcessIdentity
-{
-    std::wstring exeName;
-    std::wstring exePath;
-};
 
 const wchar_t* SelectLocalizedText(CHistoryTrafficStore::DisplayLanguage language, const LocalizedText& text)
 {
@@ -31,16 +24,12 @@ const wchar_t* SelectLocalizedText(CHistoryTrafficStore::DisplayLanguage languag
 
 std::wstring MakeItemId(int index, bool is_download)
 {
-    wchar_t buffer[32]{};
-    swprintf_s(buffer, L"App%d%ls", index + 1, is_download ? L"Down" : L"Up");
-    return buffer;
+    return L"App" + std::to_wstring(index + 1) + (is_download ? L"Down" : L"Up");
 }
 
 std::wstring MakeItemName(int index, bool is_download)
 {
-    wchar_t buffer[32]{};
-    swprintf_s(buffer, L"Top%d %ls", index + 1, is_download ? L"Down" : L"Up");
-    return buffer;
+    return L"Top" + std::to_wstring(index + 1) + (is_download ? L" Down" : L" Up");
 }
 
 void AppendLabeledTraffic(std::wstring& text, const wchar_t* label, std::uint64_t value)
@@ -131,19 +120,16 @@ const wchar_t* NetworkStatus(CNetworkTrafficCollector::Status status, CHistoryTr
 
 CProcNetPlugin& CProcNetPlugin::Instance()
 {
-    if (g_pluginInstance == nullptr)
-    {
-        g_pluginInstance = new CProcNetPlugin();
-    }
-    return *g_pluginInstance;
+    static auto* instance = new CProcNetPlugin();
+    return *instance;
 }
 
 CProcNetPlugin::CProcNetPlugin()
     : m_tooltip(L"采集器尚未启动。"),
       m_collectorStarted(false),
-      m_historyInitialized(false),
-      m_processCacheTick(0)
+      m_historyInitialized(false)
 {
+    m_collector.SetCommitSink([](void* context) { static_cast<CProcNetPlugin*>(context)->UpdateHistory(); }, this);
     m_items.reserve(kMaxApps * 2);
     for (int i = 0; i < kMaxApps; ++i)
     {
@@ -155,6 +141,8 @@ CProcNetPlugin::CProcNetPlugin()
 CProcNetPlugin::~CProcNetPlugin()
 {
     m_collector.Stop();
+    UpdateHistory();
+    m_historyStore.Checkpoint(true);
     m_networkStore.Flush(true);
 }
 
@@ -175,104 +163,15 @@ IPluginItem* CProcNetPlugin::GetItem(int index)
 
 void CProcNetPlugin::DataRequired()
 {
-    EnsureCollectorStarted();
     EnsureHistoryInitialized();
+    EnsureCollectorStarted();
     {
         std::lock_guard<std::mutex> lock(m_historyMutex);
         const auto interval = m_networkCollector.Sample();
         if (interval) m_networkStore.Add(*interval);
     }
-    m_collector.SampleTraffic();
     const auto apps = BuildAllApps();
-    UpdateHistory(apps);
     UpdateDisplayText(apps);
-}
-
-std::vector<CProcessFinder::ProcessEntry> CProcNetPlugin::GetCachedProcesses() const
-{
-    const auto now = GetTickCount64();
-    std::lock_guard<std::mutex> lock(m_processCacheMutex);
-    if (m_cachedProcesses.empty() || now - m_processCacheTick >= 1000)
-    {
-        m_cachedProcesses = CProcessFinder::EnumerateProcesses();
-        for (const auto& process : m_cachedProcesses)
-        {
-            if (!process.exeName.empty())
-            {
-                auto known_it = m_knownProcessesByPid.find(process.pid);
-                if (known_it == m_knownProcessesByPid.end())
-                {
-                    m_knownProcessesByPid.emplace(process.pid, process);
-                }
-                else if (process.creationTime == 0 ||
-                         known_it->second.creationTime == 0 ||
-                         process.creationTime != known_it->second.creationTime)
-                {
-                    known_it->second = process;
-                }
-                else
-                {
-                    known_it->second.exeName = process.exeName;
-                    known_it->second.exePath = process.exePath;
-                }
-                m_knownProcessLastSeenTick[process.pid] = now;
-            }
-        }
-
-        for (auto known_it = m_knownProcessesByPid.begin(); known_it != m_knownProcessesByPid.end();)
-        {
-            const auto seen_it = m_knownProcessLastSeenTick.find(known_it->first);
-            if (seen_it == m_knownProcessLastSeenTick.end() || now - seen_it->second > 10000)
-            {
-                m_knownProcessLastSeenTick.erase(known_it->first);
-                known_it = m_knownProcessesByPid.erase(known_it);
-            }
-            else
-            {
-                ++known_it;
-            }
-        }
-        m_processCacheTick = now;
-    }
-    return m_cachedProcesses;
-}
-
-std::unordered_map<std::wstring, std::wstring> CProcNetPlugin::BuildPathMapByName(const std::vector<CProcessFinder::ProcessEntry>& processes)
-{
-    std::unordered_map<std::wstring, std::wstring> path_by_name;
-    path_by_name.reserve(processes.size());
-    for (const auto& process : processes)
-    {
-        if (!process.exePath.empty() && path_by_name.find(process.exeName) == path_by_name.end())
-        {
-            path_by_name.emplace(process.exeName, process.exePath);
-        }
-    }
-    return path_by_name;
-}
-
-CProcNetPlugin::AppTrafficEntry CProcNetPlugin::MakeAppEntry(
-    const std::wstring& exe_name,
-    const std::unordered_map<std::wstring, std::wstring>& path_by_name)
-{
-    AppTrafficEntry entry{};
-    entry.exeName = exe_name;
-    const auto path_it = path_by_name.find(exe_name);
-    if (path_it != path_by_name.end())
-    {
-        entry.exePath = path_it->second;
-    }
-    return entry;
-}
-
-CHistoryTrafficStore::AppTotalEntry CProcNetPlugin::MakeHistoryEntry(const AppTrafficEntry& app)
-{
-    CHistoryTrafficStore::AppTotalEntry entry{};
-    entry.appName = app.exeName;
-    entry.exePath = app.exePath;
-    entry.rxTotalBytes = app.rxSampleBytes;
-    entry.txTotalBytes = app.txSampleBytes;
-    return entry;
 }
 
 bool CProcNetPlugin::IsEnglish(CHistoryTrafficStore::DisplayLanguage language)
@@ -356,74 +255,18 @@ void CProcNetPlugin::OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data)
 
 std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildAllApps() const
 {
-    const auto snapshot = m_collector.GetProcessTrafficSnapshot();
-    const auto processes = GetCachedProcesses();
-
-    std::unordered_map<DWORD, std::wstring> name_by_pid;
-    name_by_pid.reserve(processes.size());
-    for (const auto& process : processes)
-    {
-        name_by_pid[process.pid] = process.exeName;
-    }
-    const auto path_by_name = BuildPathMapByName(processes);
-
-    std::unordered_map<std::wstring, AppTrafficEntry> apps_by_name;
-    for (const auto& entry : snapshot)
-    {
-        ProcessIdentity identity{};
-        const auto it = name_by_pid.find(entry.first);
-        if (it != name_by_pid.end())
-        {
-            identity.exeName = it->second;
-            const auto path_it = path_by_name.find(identity.exeName);
-            if (path_it != path_by_name.end())
-            {
-                identity.exePath = path_it->second;
-            }
-        }
-        else
-        {
-            std::lock_guard<std::mutex> lock(m_processCacheMutex);
-            const auto known_it = m_knownProcessesByPid.find(entry.first);
-            if (known_it != m_knownProcessesByPid.end())
-            {
-                identity.exeName = known_it->second.exeName;
-                identity.exePath = known_it->second.exePath;
-            }
-            else
-            {
-                identity.exeName = L"PID" + std::to_wstring(entry.first);
-            }
-        }
-
-        auto& app = apps_by_name[identity.exeName];
-        if (app.exeName.empty())
-        {
-            app = MakeAppEntry(identity.exeName, path_by_name);
-            if (app.exePath.empty())
-            {
-                app.exePath = identity.exePath;
-            }
-        }
-        app.rxBytesPerSec += entry.second.rxBytesPerSec;
-        app.txBytesPerSec += entry.second.txBytesPerSec;
-        app.rxTotalBytes += entry.second.rxTotalBytes;
-        app.txTotalBytes += entry.second.txTotalBytes;
-        app.rxSampleBytes += entry.second.rxSampleBytes;
-        app.txSampleBytes += entry.second.txSampleBytes;
-        app.sampleSequence = (std::max)(app.sampleSequence, entry.second.sampleSequence);
-    }
-
+    const auto snapshot = m_collector.GetSnapshot();
     std::vector<AppTrafficEntry> result;
-    result.reserve(apps_by_name.size());
-    for (auto& entry : apps_by_name)
+    result.reserve(snapshot.size());
+    for (const auto& sample : snapshot)
     {
-        if (entry.second.rxBytesPerSec == 0 && entry.second.txBytesPerSec == 0 &&
-            entry.second.rxSampleBytes == 0 && entry.second.txSampleBytes == 0)
-        {
-            continue;
-        }
-        result.push_back(std::move(entry.second));
+        AppTrafficEntry app;
+        app.exeName = sample.name;
+        app.exePath = sample.path;
+        app.identity = sample.identity;
+        app.rxBytesPerSec = sample.rxPerSec;
+        app.txBytesPerSec = sample.txPerSec;
+        result.push_back(std::move(app));
     }
 
     std::sort(result.begin(), result.end(), [](const AppTrafficEntry& left, const AppTrafficEntry& right) {
@@ -445,6 +288,7 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(co
         AppTrafficEntry entry{};
         entry.exeName = app.appName;
         entry.exePath = app.exePath;
+        entry.identity = app.identity;
         entry.rxTotalBytes = app.rxTotalBytes;
         entry.txTotalBytes = app.txTotalBytes;
         result.push_back(std::move(entry));
@@ -455,8 +299,9 @@ std::vector<CProcNetPlugin::AppTrafficEntry> CProcNetPlugin::BuildHistoryApps(co
 std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTimeRange& range, CHistoryTrafficStore::DisplayLanguage language) const
 {
     std::lock_guard<std::mutex> lock(m_historyMutex);
-    const auto selected = m_historyStore.GetRangeTotal(range);
     const auto all = m_historyStore.GetAllTimeTotal();
+    const bool history_ready = m_historyStore.IsReady();
+    const auto selected = history_ready ? m_historyStore.GetRangeTotal(range) : CHistoryTrafficStore::TrafficAmount{};
     const auto network = m_networkStore.GetRange(range);
     bool all_healthy{};
     const auto network_all = m_networkStore.GetAllTimeTotal(&all_healthy);
@@ -467,10 +312,8 @@ std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTim
             { L"Network range download: ", L"网卡区间下载: " },
             { L"Network range upload: ", L"网卡区间上传: " },
             { L"Network range total: ", L"网卡区间总量: " });
-        wchar_t coverage[96]{};
-        const auto percent = network.requestedMs != 0 ? 100.0 * network.coveredMs / network.requestedMs : 0.0;
-        swprintf_s(coverage, GetLocalizedText(language, { L"\r\nSample coverage: %.2f%%", L"\r\n采样覆盖: %.2f%%" }), percent);
-        text += coverage;
+        text += GetLocalizedText(language, { L"\r\nSample coverage: ", L"\r\n采样覆盖: " });
+        text += Utils::FormatPercent(network.coveredMs, network.requestedMs);
         if (network.coveredMs < network.requestedMs) text += GetLocalizedText(language, { L" (gaps)", L" (有缺失)" });
         if (network.coarse) text += GetLocalizedText(language, { L" (coarse intervals)", L" (含长采样区间)" });
         text += L"\r\n";
@@ -481,9 +324,13 @@ std::wstring CProcNetPlugin::BuildTotalsText(const CHistoryTrafficStore::DateTim
     text += L"\r\n";
     text += GetLocalizedText(language, { L"Network all-time D/U: ", L"网卡累计 下/上: " });
     text += Utils::FormatBytes(network_all.rxBytes) + L" / " + Utils::FormatBytes(network_all.txBytes) + L"\r\n\r\n";
-    AppendTrafficBlock(text, language, selected, kRangeDownload, kRangeUpload, kRangeTotal);
-    text += L"\r\n";
-    AppendTrafficBlock(text, language, all, kAllTimeDownload, kAllTimeUpload, kAllTimeTotal);
+    if (history_ready)
+    {
+        AppendTrafficBlock(text, language, selected, kRangeDownload, kRangeUpload, kRangeTotal);
+        text += L"\r\n";
+        AppendTrafficBlock(text, language, all, kAllTimeDownload, kAllTimeUpload, kAllTimeTotal);
+    }
+    else text += GetLocalizedText(language, { L"Process history unavailable: recovery pending", L"进程历史暂不可用: 等待安全恢复" });
     text += L"\r\n";
     text += GetLocalizedText(language, { L"Network / ETW: ", L"网卡 / ETW: " });
     text += NetworkStatus(m_networkCollector.GetSnapshot().status, language);
@@ -504,6 +351,66 @@ std::wstring CProcNetPlugin::BuildLiveNetworkText(CHistoryTrafficStore::DisplayL
     text += GetLocalizedText(language, { L"   Upload: ", L"   网卡上传: " });
     text += Utils::FormatRate(live.txPerSec);
     if (!m_networkStore.Healthy()) text += GetLocalizedText(language, { L"   History write error", L"   历史保存异常" });
+    return text;
+}
+
+std::wstring CProcNetPlugin::BuildDiagnosticsText(CHistoryTrafficStore::DisplayLanguage language) const
+{
+    const auto d = m_collector.GetDiagnostics();
+    std::wstring text = GetLocalizedText(language,
+        { L"Ledger: ETW + verified connection EStats\r\n", L"正式来源: ETW + 已验证连接的 EStats\r\n" });
+    const auto line = [&](const LocalizedText& label, std::uint64_t value) {
+        text += GetLocalizedText(language, label);
+        text += std::to_wstring(value) + L"\r\n";
+    };
+    line({ L"ETW events: ", L"ETW 有效事件: " }, d.etw.accepted);
+    line({ L"ETW parse failures: ", L"ETW 解析失败: " }, d.etw.parseFailures);
+    line({ L"Endpoint parse failures: ", L"连接端点解析失败: " }, d.etw.endpointFailures);
+    line({ L"ETW events lost since attachment: ", L"接入后 ETW 丢失事件: " }, d.etw.eventsLost);
+    line({ L"ETW real-time buffers lost: ", L"ETW 实时缓冲区丢失: " }, d.etw.realtimeBuffersLost);
+    line({ L"ETW query error: ", L"ETW 会话查询错误: " }, d.etw.queryError);
+    line({ L"ETW pre-start events excluded: ", L"已排除启动前 ETW 事件: " }, d.etw.bufferedBeforeStart);
+    line({ L"ETW retransmit events: ", L"ETW 重传事件: " }, d.etw.retransmitEvents);
+    line({ L"EStats connections: ", L"EStats 连接: " }, d.estats.connections);
+    line({ L"EStats enabled: ", L"EStats 已启用: " }, d.estats.enabled);
+    line({ L"Matched probing connections: ", L"已匹配验证连接: " }, d.probing);
+    line({ L"EStats official connections: ", L"EStats 正式入账连接: " }, d.active);
+    line({ L"Verified source handoffs: ", L"已验证来源切换: " }, d.sources.switches);
+    line({ L"Source fallbacks: ", L"来源回退: " }, d.sources.fallbacks);
+    line({ L"Rejected counter intervals: ", L"已拒绝异常计数区间: " }, d.sources.rejected);
+    line({ L"Incomplete connection intervals: ", L"连接覆盖不完整区间: " }, d.sources.gaps);
+    line({ L"Proof session error: ", L"连接验证会话错误: " }, d.proof.error);
+    line({ L"Proof parse failures: ", L"连接验证解析失败: " }, d.proof.parseFailures);
+    line({ L"Proof lost events/buffers: ", L"连接验证丢失事件及缓冲区: " }, d.proof.eventsLost + d.proof.buffersLost);
+    line({ L"Source tracking capacity reached: ", L"来源跟踪容量超限: " }, d.sources.overflows);
+    line({ L"EStats enable failures: ", L"EStats 启用失败: " }, d.estats.enableFailures);
+    line({ L"EStats read failures: ", L"EStats 读取失败: " }, d.estats.readFailures);
+    line({ L"EStats baseline resets: ", L"EStats 基线重置: " }, d.estats.resets);
+    line({ L"EStats coarse intervals: ", L"EStats 长采样区间: " }, d.estats.coarseIntervals);
+    line({ L"EStats last error: ", L"EStats 最近错误: " }, d.estats.lastError);
+    line({ L"Connection cache overflow: ", L"连接缓存超限: " }, d.queueOverflows);
+    line({ L"History scheduler failures: ", L"历史调度异常: " }, d.commitFailures);
+    text += GetLocalizedText(language, { L"Unknown D/U: ", L"未归属 下/上: " });
+    text += Utils::FormatBytes(d.unknownRx) + L" / " + Utils::FormatBytes(d.unknownTx) + L"\r\n";
+    std::lock_guard<std::mutex> lock(m_historyMutex);
+    text += GetLocalizedText(language, { L"History: ", L"历史保存: " });
+    text += m_historyStore.IsWriteHealthy() ? GetLocalizedText(language, { L"OK", L"正常" }) :
+        GetLocalizedText(language, { L"Write failed; retry pending", L"写入失败，等待重试" });
+    const auto metadata = m_historyStore.GetEngineMetadata(m_historyStore.GetPreferredRange());
+    text += L"\r\n";
+    if (metadata.cutover)
+    {
+        FILETIME fileTime{ static_cast<DWORD>(metadata.cutover), static_cast<DWORD>(metadata.cutover >> 32) };
+        SYSTEMTIME utc{};
+        FileTimeToSystemTime(&fileTime, &utc);
+        text += GetLocalizedText(language, { L"V2 start: ", L"V2 启用: " });
+        text += Utils::FormatDateTime(utc, true) + L" UTC";
+    }
+    else text += GetLocalizedText(language, { L"V2 history: not started", L"V2 历史: 尚未开始" });
+    if (metadata.corrupt || (metadata.confidence & 6))
+        text += GetLocalizedText(language, { L"\r\nSelected range: incomplete/unknown metadata", L"\r\n所选范围: 存在不完整或未知记录" });
+    if (metadata.legacy)
+        text += GetLocalizedText(language, { L"\r\nLegacy data has no V2 source/quality metadata", L"\r\n旧历史无 V2 来源及完整性元数据" });
     return text;
 }
 
@@ -616,27 +523,30 @@ void CProcNetPlugin::UpdateDisplayText(const std::vector<AppTrafficEntry>& apps)
     m_tooltip = BuildTooltipText(apps, visible_count, english, m_collector.GetStatusText());
 }
 
-void CProcNetPlugin::UpdateHistory(const std::vector<AppTrafficEntry>& apps)
+void CProcNetPlugin::UpdateHistory()
 {
+    const auto batch = m_collector.PeekPending();
     std::lock_guard<std::mutex> lock(m_historyMutex);
-    std::uint64_t sample_sequence = 0;
-    for (const auto& app : apps)
+    if (!batch.sequence)
     {
-        sample_sequence = (std::max)(sample_sequence, app.sampleSequence);
-    }
-    if (sample_sequence == 0 || sample_sequence == m_lastHistorySampleSequence)
-    {
+        m_historyStore.Checkpoint();
         return;
     }
-    m_lastHistorySampleSequence = sample_sequence;
-
     std::vector<CHistoryTrafficStore::AppTotalEntry> history_apps;
-    history_apps.reserve(apps.size());
-    for (const auto& app : apps)
+    history_apps.reserve(batch.deltas.size());
+    for (const auto& delta : batch.deltas)
     {
-        history_apps.push_back(MakeHistoryEntry(app));
+        CHistoryTrafficStore::AppTotalEntry entry;
+        entry.appName = delta.name; entry.exePath = delta.path; entry.identity = delta.identity;
+        entry.rxTotalBytes = delta.rx; entry.txTotalBytes = delta.tx;
+        entry.sampleStart = delta.start; entry.sampleEnd = delta.end; entry.source = delta.source; entry.confidence = delta.confidence;
+        history_apps.push_back(std::move(entry));
     }
-    m_historyStore.Update(history_apps);
+    if (batch.sequence == m_lastHistorySampleSequence || m_historyStore.Update(history_apps))
+    {
+        m_lastHistorySampleSequence = batch.sequence;
+        m_collector.Acknowledge(batch.sequence);
+    }
 }
 
 void CProcNetPlugin::EnsureCollectorStarted()
@@ -644,6 +554,11 @@ void CProcNetPlugin::EnsureCollectorStarted()
     std::lock_guard<std::mutex> lock(m_historyMutex);
     if (!m_collectorStarted)
     {
+        // API 7 has no unload callback. Keep worker code mapped if the host
+        // releases its plugin handle; do not join threads under the loader lock.
+        HMODULE module{};
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                reinterpret_cast<LPCWSTR>(&CProcNetPlugin::Instance), &module)) return;
         m_collectorStarted = m_collector.Start();
     }
 }
@@ -679,8 +594,8 @@ void CProcNetPlugin::EnsureDetailWindow()
 
 void CProcNetPlugin::ShowDetailWindow(HWND parent)
 {
-    EnsureCollectorStarted();
     EnsureHistoryInitialized();
+    EnsureCollectorStarted();
     EnsureDetailWindow();
 
     if (m_detailWindow != nullptr)
