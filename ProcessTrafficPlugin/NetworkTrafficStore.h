@@ -24,7 +24,7 @@ public:
         bool healthy{ true };
     };
 
-    void Initialize(const std::wstring& base_dir);
+    bool Initialize(const std::wstring& base_dir);
     bool Add(const CNetworkTrafficCollector::Interval& interval);
     bool Flush(bool finish_current = false);
     Query GetRange(const Range& range) const;

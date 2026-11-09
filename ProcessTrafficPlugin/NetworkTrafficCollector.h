@@ -51,6 +51,7 @@ private:
     Adapter m_previous;
     std::uint64_t m_previousTick{};
     std::uint64_t m_previousUtc{};
+    std::uint64_t m_observationTick{};
     std::uint64_t m_idleSince{};
     bool m_hasBaseline{};
 };

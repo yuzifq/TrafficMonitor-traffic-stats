@@ -105,6 +105,91 @@ void CheckCollector()
     std::cout << "PASS: independent 64-bit sampling, stable adapter selection, rates, resets, reconnect, missing reads, clock jumps, coarse intervals\n";
 }
 
+void CheckRecentAdapterSelection()
+{
+    Collector collector;
+    const auto base = Time(2024, 1, 1);
+    auto a = Adapter(L"A", 100ULL << 30, 100ULL << 30);
+    auto b = Adapter(L"B", 10ULL << 20, 10ULL << 20);
+    auto tunnel = Adapter(L"Tunnel", 1ULL << 60, 1ULL << 60, true, false);
+    collector.Observe({ a, b, tunnel }, 1000, base);
+    Check(collector.GetSnapshot().activeName == L"A", "Initial eligible choice is not deterministic");
+    for (U64 i = 1; i <= 40; ++i)
+    {
+        b.rxBytes += 100; b.txBytes += 50;
+        tunnel.rxBytes += 1000000;
+        const auto sample = collector.Observe({ a, b, tunnel }, 1000 + i * 1000, base + i * 1000);
+        Check(collector.GetSnapshot().activeName == (i < 31 ? L"A" : L"B"),
+            "Idle high boot total defeated recent activity or the 30-second hysteresis");
+        if (i == 31) Check(!sample, "Automatic switch bridged counters from different adapters");
+        if (i > 31) Check(sample && sample->rxBytes == 100 && sample->txBytes == 50,
+            "Automatic switch backfilled boot counters or lost its new baseline");
+    }
+    // An active selected adapter stays stable even when another is much busier.
+    a.rxBytes += 1ULL << 40; b.rxBytes += 1;
+    collector.Observe({ a, b }, 42000, base + 41000);
+    Check(collector.GetSnapshot().activeName == L"B", "Concurrent traffic caused selection flapping");
+    for (U64 i = 1; i <= 31; ++i)
+        collector.Observe({ a, b }, 42000 + i * 1000, base + 41000 + i * 1000);
+    Check(collector.GetSnapshot().activeName == L"B", "All-idle adapters changed selection");
+    a.instance = 2; a.rxBytes = 1ULL << 62;
+    collector.Observe({ a, b }, 74000, base + 73000);
+    Check(collector.GetSnapshot().activeName == L"B", "New interface instance was treated as new traffic");
+    a.rxBytes = 1;
+    collector.Observe({ a, b }, 75000, base + 74000);
+    Check(collector.GetSnapshot().activeName == L"B", "Counter rollback was treated as activity");
+    a.rxBytes += 500;
+    collector.Observe({ a, b }, 81000, base + 80000);
+    Check(collector.GetSnapshot().activeName == L"B", "Stale observation promoted an unmeasured adapter");
+    a.rxBytes += 1;
+    collector.Observe({ a, b }, 82000, base + 81000);
+    Check(collector.GetSnapshot().activeName == L"A", "Fresh activity after reset/stale baselines did not recover");
+    b.rxBytes += 1ULL << 40;
+    collector.Observe({ a, b }, 83000, base + 82000);
+    Check(collector.GetSnapshot().activeName == L"A", "Automatic selection switched back without hysteresis");
+    std::cout << "PASS: recent adapter deltas, physical priority, idle hysteresis, active stability, reset/instance/stale guards\n";
+}
+
+void CheckReinitialize(const std::filesystem::path& fixture)
+{
+    const auto base = Time(2024, 5, 1);
+    for (const bool checkpointFailure : { false, true })
+    {
+        const auto root = fixture / (checkpointFailure ? L"checkpoint" : L"append");
+        const auto oldRoot = root / L"old", newRoot = root / L"new";
+        Store oldStore, target;
+        Check(oldStore.Initialize(oldRoot.wstring()) && target.Initialize(newRoot.wstring()), "Cannot initialize root-switch fixtures");
+        Check(oldStore.SetPreferredAdapter(L"A") && target.SetPreferredAdapter(L"B"), "Cannot seed root preferences");
+        Check(oldStore.Add({ base, base + 1000, 100, 10, L"A", false }) && oldStore.Flush(true) &&
+            target.Add({ base, base + 1000, 900, 90, L"B", false }) && target.Flush(true), "Cannot seed root-switch histories");
+        const auto oldDay = DailyFile(oldRoot), newDay = DailyFile(newRoot);
+        const auto oldBytes = Read(oldDay), newBytes = Read(newDay);
+        Check(oldStore.Add({ base + 1000, base + 2000, 200, 20, L"A", false }), "Cannot seed unsaved old-root bytes");
+        const auto lockPath = checkpointFailure ? oldRoot / L"network_traffic_history/pending.tsv.tmp" : oldDay;
+        const auto locked = CreateFileW(lockPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+            checkpointFailure ? CREATE_ALWAYS : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Check(locked != INVALID_HANDLE_VALUE, "Cannot lock root-switch fixture");
+        try
+        {
+            Check(!oldStore.Initialize(newRoot.wstring()) && !oldStore.Healthy() &&
+                oldStore.GetPreferredAdapter() == L"A" && oldStore.GetAllTimeTotal().rxBytes == 300 &&
+                Read(oldDay) == oldBytes && Read(newDay) == newBytes,
+                "Failed reinitialization cleared old RAM, changed roots or touched target history");
+        }
+        catch (...) { CloseHandle(locked); throw; }
+        CloseHandle(locked);
+        Check(oldStore.Initialize(newRoot.wstring()) && oldStore.GetAllTimeTotal().rxBytes == 900 &&
+            oldStore.GetPreferredAdapter() == L"B", "Reinitialization did not resume after old-root recovery");
+        Store recovered;
+        Check(recovered.Initialize(oldRoot.wstring()) && recovered.GetAllTimeTotal().rxBytes == 300 &&
+            recovered.GetAllTimeTotal().txBytes == 30 && recovered.Flush(true),
+            "Retried reinitialization lost or duplicated old-root bytes");
+        Check(!oldStore.Initialize(L"") && oldStore.GetAllTimeTotal().rxBytes == 900,
+            "Empty initialization changed an established root");
+    }
+    std::cout << "PASS: failed checkpoint/append blocks root replacement; original RAM, files and preferences survive exact retry\n";
+}
+
 void CheckStore(const std::filesystem::path& fixture)
 {
     const auto base = Time(2024, 2, 29);
@@ -352,21 +437,32 @@ void CheckDll(const wchar_t* dll_path, bool collect = true)
         !std::filesystem::exists(fixture / L"network_traffic_history") &&
         Read(host_directory / L"app_traffic_state.tsv") == root_state,
         "Early metadata or late config selected storage outside host/history");
-    Check(std::wstring(plugin->GetInfo(ITMPlugin::TMI_VERSION)) == L"1.2.0", "Plugin version is not 1.2.0");
+    Check(std::wstring(plugin->GetInfo(ITMPlugin::TMI_VERSION)) == L"1.2.1", "Plugin version is not 1.2.1");
     Check(plugin->GetItem(0) && plugin->GetItem(9) && !plugin->GetItem(10), "Process ranking items changed");
     if (!collect)
     {
         std::cout << "PASS: actual Release DLL load, API 7, version, ranking, early metadata and late config use host/history without starting collectors\n";
         return;
     }
-    plugin->DataRequired();
-    Sleep(1000);
-    plugin->DataRequired();
+    plugin->DataRequired(); // Start once, then suspend all host/UI callbacks.
     Check(host.reads == 0 && Read(official) == "host history sentinel\n", "Plugin reused official statistics");
-    const auto checkpoint = Read(storage / L"network_traffic_history" / L"pending.tsv");
-    Check(checkpoint.find("network\t1\n") == 0 && checkpoint.size() > 10, "Release DLL did not persist an independent sample");
-    // The host owns plugin lifetime. Keep the module loaded until this smoke-test process exits.
-    std::cout << "PASS: actual Release DLL load, API 7, version, ranking items, independent host callbacks and persisted network sample\n";
+    const auto checkpointPath = storage / L"network_traffic_history" / L"pending.tsv";
+    const auto waitCheckpoint = [&](const std::string& previous) {
+        const auto deadline = GetTickCount64() + 6000;
+        std::string text;
+        do
+        {
+            Sleep(50);
+            text = Read(checkpointPath);
+            if (text.find("network\t1\n") == 0 && text.size() > 10 && text != previous) return text;
+        } while (GetTickCount64() < deadline);
+        throw std::runtime_error("Release DLL stopped adapter sampling/checkpointing without host callbacks");
+    };
+    const auto first = waitCheckpoint({});
+    const auto second = waitCheckpoint(first);
+    Check(FreeLibrary(library) != FALSE, "Cannot release host DLL handle");
+    waitCheckpoint(second); // The existing module pin must still protect the worker.
+    std::cout << "PASS: actual Release DLL independently samples/checkpoints with one host callback and survives host handle release\n";
 }
 }
 
@@ -380,6 +476,8 @@ int wmain(int argc, wchar_t** argv)
         const auto fixture = std::filesystem::absolute(std::filesystem::path(L"build") /
             (L"network-checks-" + std::to_wstring(GetTickCount64())) / L"\u4e2d\u6587");
         CheckCollector();
+        CheckRecentAdapterSelection();
+        CheckReinitialize(fixture / L"reinitialize");
         CheckStore(fixture);
         CheckMidnight(fixture / L"rollover");
         CheckInterruptedCreation(fixture / L"interrupted");

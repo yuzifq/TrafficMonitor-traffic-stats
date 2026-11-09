@@ -119,6 +119,8 @@ const wchar_t* NetworkStatus(CNetworkTrafficCollector::Status status, CHistoryTr
 
 CProcNetPlugin& CProcNetPlugin::Instance()
 {
+    // API 7 has no safe shutdown callback. The pinned worker and its state live
+    // until process exit; completed collection ticks must persist without a destructor.
     static auto* instance = new CProcNetPlugin();
     return *instance;
 }
@@ -164,11 +166,6 @@ void CProcNetPlugin::DataRequired()
 {
     EnsureHistoryInitialized();
     EnsureCollectorStarted();
-    {
-        std::lock_guard<std::mutex> lock(m_historyMutex);
-        const auto interval = m_networkCollector.Sample();
-        if (interval) m_networkStore.Add(*interval);
-    }
     const auto apps = BuildAllApps();
     UpdateDisplayText(apps);
 }
@@ -196,7 +193,7 @@ const wchar_t* CProcNetPlugin::GetInfoText(PluginInfoIndex index, CHistoryTraffi
     case TMI_COPYRIGHT:
         return L"Copyright (c) 2026 yuzifq";
     case TMI_VERSION:
-        return L"1.2.0";
+        return L"1.2.1";
     case TMI_URL:
         return L"https://github.com/yuzifq/TrafficMonitor-traffic-stats";
     case TMI_API_VERSION:
@@ -444,8 +441,9 @@ CNetworkTrafficCollector::Snapshot CProcNetPlugin::GetNetworkSnapshot() const
 bool CProcNetPlugin::SetNetworkAdapter(const std::wstring& id)
 {
     std::lock_guard<std::mutex> lock(m_historyMutex);
+    // Reject the switch rather than reporting success with old history pending.
+    if (!m_networkStore.Flush(true)) return false;
     if (!m_networkStore.SetPreferredAdapter(id)) return false;
-    m_networkStore.Flush(true);
     m_networkCollector.SelectAdapter(id);
     return true;
 }
@@ -548,27 +546,34 @@ void CProcNetPlugin::UpdateHistory()
 {
     const auto batch = m_collector.PeekPending();
     std::lock_guard<std::mutex> lock(m_historyMutex);
-    if (!batch.sequence)
+    // The independent collector tick owns adapter sampling, not host/UI requests.
+    const auto interval = m_networkCollector.Sample();
+    if (interval) m_networkStore.Add(*interval);
+    // Persist/retry the open minute without splitting it into per-second records.
+    m_networkStore.Flush();
+    if (batch.sequence)
     {
-        if (!m_historyStore.Checkpoint()) ++m_historyWriteFailures;
-        return;
+        std::vector<CHistoryTrafficStore::AppTotalEntry> history_apps;
+        history_apps.reserve(batch.deltas.size());
+        for (const auto& delta : batch.deltas)
+        {
+            CHistoryTrafficStore::AppTotalEntry entry;
+            entry.appName = delta.name; entry.exePath = delta.path; entry.identity = delta.identity;
+            entry.rxTotalBytes = delta.rx; entry.txTotalBytes = delta.tx;
+            entry.sampleStart = delta.start; entry.sampleEnd = delta.end; entry.source = delta.source; entry.confidence = delta.confidence;
+            history_apps.push_back(std::move(entry));
+        }
+        if (batch.sequence == m_lastHistorySampleSequence || m_historyStore.Update(history_apps))
+        {
+            // Update owns the RAM delta even if its checkpoint failed. Retrying
+            // persistence must not replay those bytes through Update.
+            m_lastHistorySampleSequence = batch.sequence;
+            m_collector.Acknowledge(batch.sequence);
+        }
+        else ++m_historyWriteFailures;
     }
-    std::vector<CHistoryTrafficStore::AppTotalEntry> history_apps;
-    history_apps.reserve(batch.deltas.size());
-    for (const auto& delta : batch.deltas)
-    {
-        CHistoryTrafficStore::AppTotalEntry entry;
-        entry.appName = delta.name; entry.exePath = delta.path; entry.identity = delta.identity;
-        entry.rxTotalBytes = delta.rx; entry.txTotalBytes = delta.tx;
-        entry.sampleStart = delta.start; entry.sampleEnd = delta.end; entry.source = delta.source; entry.confidence = delta.confidence;
-        history_apps.push_back(std::move(entry));
-    }
-    if (batch.sequence == m_lastHistorySampleSequence || m_historyStore.Update(history_apps))
-    {
-        m_lastHistorySampleSequence = batch.sequence;
-        m_collector.Acknowledge(batch.sequence);
-    }
-    else ++m_historyWriteFailures;
+    // Also retry dirty checkpoints on idle ticks; process exit cannot call us.
+    if (!m_historyStore.Checkpoint(true)) ++m_historyWriteFailures;
 }
 
 void CProcNetPlugin::EnsureCollectorStarted()

@@ -1800,7 +1800,7 @@ bool CTrafficDetailWindow::HandleCommand(WORD command_id, WORD notify_code)
     {
         const auto selected = ComboBox_GetCurSel(m_adapterCombo);
         if (selected >= 0 && static_cast<size_t>(selected) < m_adapterIds.size() && !m_plugin.SetNetworkAdapter(m_adapterIds[selected]))
-            MessageBoxW(m_hwnd, GetLocalizedText(GetSelectedLanguage(), { L"Cannot save adapter selection.", L"无法保存网卡选择。" }),
+            MessageBoxW(m_hwnd, GetLocalizedText(GetSelectedLanguage(), { L"Cannot flush history or save adapter selection. Adapter unchanged.", L"无法保存历史或网卡选择，未切换网卡。" }),
                 GetLocalizedText(GetSelectedLanguage(), { L"Error", L"异常" }), MB_OK | MB_ICONERROR);
         RefreshView();
         return true;

@@ -26,7 +26,7 @@ void NativeQuicProbe(const wchar_t* output)
     }, &hybrid);
     try
     {
-        WinHttpHandle session{ WinHttpOpen(L"ProcessTrafficPlugin-native-test/1.2.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WinHttpHandle session{ WinHttpOpen(L"ProcessTrafficPlugin-native-test/1.2.1", WINHTTP_ACCESS_TYPE_NO_PROXY,
             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0) };
         require(session.value != nullptr, "WinHttpOpen");
         require(WinHttpSetTimeouts(session.value, 5000, 5000, 15000, 15000), "WinHttpSetTimeouts");

@@ -27,6 +27,7 @@ void CNetworkTrafficCollector::SelectAdapter(const std::wstring& id)
     m_snapshot.rxPerSec = m_snapshot.txPerSec = 0;
     m_snapshot.status = Status::Starting;
     m_hasBaseline = false;
+    m_observationTick = 0;
     m_idleSince = 0;
 }
 
@@ -36,6 +37,7 @@ std::optional<CNetworkTrafficCollector::Interval> CNetworkTrafficCollector::Samp
     if (GetIfTable2(&table) != NO_ERROR)
     {
         m_hasBaseline = false;
+        m_observationTick = 0;
         m_snapshot.status = Status::Error;
         m_snapshot.rxPerSec = m_snapshot.txPerSec = 0;
         return std::nullopt;
@@ -66,33 +68,47 @@ std::optional<CNetworkTrafficCollector::Interval> CNetworkTrafficCollector::Obse
     std::vector<Adapter> adapters, std::uint64_t tick, std::uint64_t utc_ms)
 {
     std::sort(adapters.begin(), adapters.end(), [](const Adapter& a, const Adapter& b) { return a.id < b.id; });
-    m_snapshot.adapters = std::move(adapters);
     m_snapshot.rxPerSec = m_snapshot.txPerSec = 0;
+    const auto recentBytes = [&](const Adapter& adapter) -> long double {
+        if (!m_observationTick || tick <= m_observationTick || tick - m_observationTick > 5000) return 0;
+        for (const auto& previous : m_snapshot.adapters)
+            if (previous.id == adapter.id && previous.instance == adapter.instance && previous.connected &&
+                adapter.rxBytes >= previous.rxBytes && adapter.txBytes >= previous.txBytes)
+                return static_cast<long double>(adapter.rxBytes - previous.rxBytes) + (adapter.txBytes - previous.txBytes);
+        return 0;
+    };
     const Adapter* selected = nullptr;
     if (!m_snapshot.preferredId.empty())
     {
-        for (const auto& adapter : m_snapshot.adapters)
+        for (const auto& adapter : adapters)
             if (adapter.id == m_snapshot.preferredId) selected = &adapter;
     }
     else
     {
         // Keep a working choice stable; reconsider it after 30 seconds without traffic.
-        const bool has_hardware = std::any_of(m_snapshot.adapters.begin(), m_snapshot.adapters.end(),
+        const bool has_hardware = std::any_of(adapters.begin(), adapters.end(),
             [](const Adapter& adapter) { return adapter.connected && adapter.hardware; });
-        for (const auto& adapter : m_snapshot.adapters)
+        for (const auto& adapter : adapters)
             if (adapter.id == m_previous.id && adapter.connected && (!has_hardware || adapter.hardware)) selected = &adapter;
-        if (selected == nullptr || (m_idleSince != 0 && tick - m_idleSince >= 30000))
+        if (selected == nullptr || (m_idleSince != 0 && tick >= m_idleSince && tick - m_idleSince >= 30000 && recentBytes(*selected) == 0))
         {
-            selected = nullptr;
-            for (const auto& adapter : m_snapshot.adapters)
+            // Historical boot totals cannot identify the currently active adapter.
+            // Keep an idle choice until another adapter has measured new traffic.
+            const Adapter* best = selected;
+            long double busiest = 0;
+            for (const auto& adapter : adapters)
             {
                 if (!adapter.connected || (has_hardware && !adapter.hardware)) continue;
-                if (selected == nullptr || static_cast<long double>(adapter.rxBytes) + adapter.txBytes >
-                    static_cast<long double>(selected->rxBytes) + selected->txBytes) selected = &adapter;
+                if (best == nullptr) best = &adapter;
+                const auto bytes = recentBytes(adapter);
+                if (bytes > busiest) { busiest = bytes; best = &adapter; }
             }
-            m_idleSince = 0;
+            if (best != selected) m_idleSince = 0;
+            selected = best;
         }
     }
+    m_snapshot.adapters = std::move(adapters);
+    m_observationTick = tick;
     if (selected == nullptr || !selected->connected)
     {
         m_snapshot.activeName = selected != nullptr ? selected->name : L"";

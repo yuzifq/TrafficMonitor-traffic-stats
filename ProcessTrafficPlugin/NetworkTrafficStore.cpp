@@ -157,11 +157,13 @@ CNetworkTrafficStore::Day CNetworkTrafficStore::Summarize(const std::vector<Reco
     return day;
 }
 
-void CNetworkTrafficStore::Initialize(const std::wstring& base_dir)
+bool CNetworkTrafficStore::Initialize(const std::wstring& base_dir)
 {
     const auto root = std::filesystem::path(base_dir) / L"network_traffic_history";
-    if (base_dir.empty() || m_root == root) return;
-    if (!m_root.empty()) Flush(true);
+    if (base_dir.empty()) return false;
+    if (m_root == root) return m_writeHealthy;
+    // A failed flush still owns pending bytes in the old root. Do not clear them.
+    if (!m_root.empty() && !Flush(true)) return false;
     m_root = root;
     m_days.clear();
     m_pending.clear();
@@ -195,6 +197,7 @@ void CNetworkTrafficStore::Initialize(const std::wstring& base_dir)
     }
     RecoverCheckpoint();
     if (!m_pending.empty()) Flush();
+    return m_writeHealthy;
 }
 
 bool CNetworkTrafficStore::ReadDay(const std::wstring& key, std::vector<Record>& records,
@@ -296,6 +299,7 @@ bool CNetworkTrafficStore::SetPreferredAdapter(const std::wstring& id)
     const auto text = NarrowId(id);
     if (!AtomicWrite(m_root / L"adapter.txt", text.data(), text.size())) { m_writeHealthy = false; return false; }
     m_preferredAdapter = id;
+    if (!m_checkpointCorrupt && !m_dirty && m_pending.empty()) m_writeHealthy = true;
     return true;
 }
 

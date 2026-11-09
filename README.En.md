@@ -46,6 +46,11 @@ If you do not want to build the plugin yourself, you can download the prebuilt p
 
 ## Adapter Statistics And Minute History
 
+- Adapter sampling runs on the independent collection schedule, targeting roughly one second. Suspending host data requests or pausing UI refresh does not stop sampling.
+- Automatic selection compares traffic increments between valid adjacent observations and prefers physical adapters. A working adapter is reconsidered after at least 30 idle seconds when another adapter has new traffic, not based on boot-time totals.
+- Adapter and history-directory switches first commit existing data. Failed persistence rejects the switch and retains the original state and pending bytes for retry.
+- Each completed collection tick checkpoints pending adapter and process history, including retries on idle ticks, instead of waiting 9-10 seconds. Minute coalescing is retained; this does not add per-second history records.
+- API 7 has no safe exit callback. The module remains pinned and persistence does not depend on the plugin destructor. Unfinished samples, scheduling delays or persistent write failures can still lose recent data on exit; zero loss is not guaranteed.
 - Consecutive short samples within a minute are merged. Samples crossing a minute boundary and long intervals retain their actual endpoints; bytes are never distributed proportionally.
 - Network range totals include only records fully contained in the selected range. Boundary bytes are shown separately and excluded from those totals.
 - Sample coverage distinguishes missing observations from measured zero traffic. Long sampling intervals are flagged.

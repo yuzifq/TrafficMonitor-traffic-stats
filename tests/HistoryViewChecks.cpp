@@ -599,6 +599,44 @@ void CheckNetworkView(CProcNetPlugin& plugin, const std::filesystem::path& fixtu
     DestroyWindow(hwnd);
     std::cout << "PASS: bilingual footer order/spacing, exact native selection ranges, read-only text, stable selection during refresh, compact layouts, larger fonts and rendered screenshots" << std::endl;
 }
+void CheckAdapterSwitchFailure(CProcNetPlugin& plugin, const std::filesystem::path& fixture)
+{
+    Check(plugin.m_networkStore.Initialize(fixture.wstring()) && plugin.SetNetworkAdapter(L"A"), "Cannot initialize switch fixture");
+    const std::uint64_t base = 13359081600000ULL;
+    Check(plugin.m_networkStore.Add({ base, base + 1000, 1234, 5678, L"A", false }), "Cannot seed switch history");
+    const auto root = fixture / L"network_traffic_history";
+    const auto settings = root / L"adapter.txt";
+    std::wstring previous = L"A";
+    for (const auto& entry : { std::pair{ L"pending.tsv.tmp", L"B" }, std::pair{ L"adapter.txt.tmp", L"C" } })
+    {
+        const auto locked = CreateFileW((root / entry.first).c_str(), GENERIC_READ, 0, nullptr,
+            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Check(locked != INVALID_HANDLE_VALUE, "Cannot lock adapter switch fixture");
+        try
+        {
+            Check(!plugin.SetNetworkAdapter(entry.second) && !plugin.m_networkStore.Healthy() &&
+                plugin.GetNetworkSnapshot().preferredId == previous && plugin.m_networkStore.GetPreferredAdapter() == previous,
+                "Failed history/preference save reported successful selection or changed the adapter");
+            std::ifstream input(settings, std::ios::binary);
+            std::string saved;
+            std::getline(input, saved);
+            Check(saved.size() == previous.size() && std::equal(saved.begin(), saved.end(), previous.begin()),
+                "Failed switch changed the persisted preference");
+        }
+        catch (...) { CloseHandle(locked); throw; }
+        CloseHandle(locked);
+        Check(plugin.SetNetworkAdapter(entry.second) && plugin.GetNetworkSnapshot().preferredId == entry.second &&
+            plugin.m_networkStore.Healthy(),
+            "Adapter switch did not recover after unlocking history/settings");
+        previous = entry.second;
+    }
+    CNetworkTrafficStore recovered;
+    Check(recovered.Initialize(fixture.wstring()) && recovered.GetAllTimeTotal().rxBytes == 1234 &&
+        recovered.GetAllTimeTotal().txBytes == 5678 && recovered.GetPreferredAdapter() == L"C",
+        "Adapter switch retries lost/replayed history or failed to persist the final preference");
+    std::cout << "PASS: failed history/preference writes reject adapter switches without partial selection or repeated bytes\n";
+}
+
 void CheckSorting(CProcNetPlugin& plugin)
 {
     CTrafficDetailWindow view(plugin);
@@ -675,6 +713,8 @@ void CheckPausedCheckpoint(CProcNetPlugin& plugin, const std::filesystem::path& 
     verificationRange.start.wHour = verificationRange.start.wMinute = 0;
     plugin.m_historyStore.Initialize(fixture.wstring());
     plugin.m_historyStore.GetAllTimeTotal();
+    plugin.m_networkStore.Initialize(fixture.wstring());
+    plugin.m_networkCollector.SelectAdapter(L"");
     plugin.m_historyInitialized = true;
     CTrafficDetailWindow view(plugin);
     const auto window = CreateHiddenWindow(view);
@@ -709,10 +749,10 @@ void CheckPausedCheckpoint(CProcNetPlugin& plugin, const std::filesystem::path& 
             if (tick > previousTick) { maximumGap = (std::max)(maximumGap, tick - previousTick); previousTick = tick; }
             return plugin.m_historyStore.GetAllTimeTotal().txBytes >= 5678 &&
                 !plugin.m_historyStore.m_checkpointDirty && std::filesystem::last_write_time(checkpoint) != original;
-        }, 12000);
+        }, 4000);
         {
             std::lock_guard<std::mutex> lock(plugin.m_historyMutex);
-            Check(maximumGap <= 10000, "Independent checkpoint exceeded its ten-second target");
+            Check(maximumGap <= 4000, "Completed collection ticks left process history uncheckpointed");
             std::cout << "checkpoint_gap_ms=" << maximumGap << '\n';
         }
         stop();
@@ -729,6 +769,127 @@ void CheckPausedCheckpoint(CProcNetPlugin& plugin, const std::filesystem::path& 
     catch (...) { stop(); throw; }
     std::cout << "PASS: paused UI and no host calls retain exact traffic with independently refreshed durable checkpoints\n";
 }
+
+void CheckCheckpointRetry(CProcNetPlugin& plugin, const std::filesystem::path& fixture)
+{
+    plugin.m_historyStore.Initialize(fixture.wstring());
+    plugin.m_historyStore.GetAllTimeTotal();
+    plugin.m_networkStore.Initialize(fixture.wstring());
+    plugin.m_networkCollector.SelectAdapter(L"UnavailableTestAdapter");
+    plugin.m_collector.m_pending.clear();
+    plugin.m_collector.m_inflight = {};
+    std::filesystem::create_directories(fixture / L"app_traffic_history");
+    auto processLock = CreateFileW((fixture / L"app_traffic_history/current.tmp.new").c_str(),
+        GENERIC_READ, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    auto networkLock = CreateFileW((fixture / L"network_traffic_history/pending.tsv.tmp").c_str(),
+        GENERIC_READ, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const auto unlock = [&] {
+        if (processLock != INVALID_HANDLE_VALUE) { CloseHandle(processLock); processLock = INVALID_HANDLE_VALUE; }
+        if (networkLock != INVALID_HANDLE_VALUE) { CloseHandle(networkLock); networkLock = INVALID_HANDLE_VALUE; }
+    };
+    try
+    {
+        Check(processLock != INVALID_HANDLE_VALUE && networkLock != INVALID_HANDLE_VALUE, "Cannot lock checkpoint fixtures");
+        CHybridTrafficCollector::Delta delta;
+        delta.name = L"checkpoint-fixture.exe"; delta.rx = 1234; delta.tx = 5678;
+        plugin.m_collector.m_pending[{ delta.identity, delta.source }] = delta;
+        const std::uint64_t base = 13359081600000ULL; // Fixed UTC minute, separate from live samples.
+        plugin.m_networkStore.Add({ base, base + 1000, 4321, 8765, L"Fixture", false });
+        const auto recordId = plugin.m_networkStore.m_current->id;
+        for (int i = 0; i < 3; ++i) plugin.m_collector.m_commitSink(plugin.m_collector.m_commitContext);
+        Check(!plugin.m_historyStore.IsWriteHealthy() && !plugin.m_networkStore.Healthy() &&
+            !plugin.m_collector.PeekPending().sequence && plugin.m_historyStore.m_checkpointDirty,
+            "Failed checkpoint did not retain RAM ownership or report write failure");
+        unlock();
+        for (int i = 0; i < 3; ++i) plugin.m_collector.m_commitSink(plugin.m_collector.m_commitContext);
+        const auto process = plugin.m_historyStore.GetAllTimeTotal();
+        const auto network = plugin.m_networkStore.GetRangeUtc(base, base + 1000);
+        Check(!plugin.m_historyStore.m_checkpointDirty && plugin.m_historyStore.IsWriteHealthy() &&
+            plugin.m_networkStore.Healthy() && !plugin.m_networkStore.m_dirty &&
+            process.rxBytes == 1234 && process.txBytes == 5678 &&
+            network.amount.rxBytes == 4321 && network.amount.txBytes == 8765 &&
+            plugin.m_networkStore.m_current && plugin.m_networkStore.m_current->id == recordId &&
+            plugin.m_networkStore.m_pending.empty(), "Idle tick retry lost/replayed bytes or split the open minute");
+    }
+    catch (...) { unlock(); throw; }
+    std::cout << "PASS: locked process/adapter checkpoints retry on idle ticks without reapplying deltas or splitting minutes\n";
+}
+
+void CheckpointExitChild(CProcNetPlugin& plugin, const std::filesystem::path& fixture, bool abrupt)
+{
+    plugin.m_historyStore.Initialize(fixture.wstring());
+    CHistoryTrafficStore::AppTotalEntry first;
+    first.appName = L"PID4294967293"; first.rxTotalBytes = 1234;
+    Check(plugin.m_historyStore.Update({ first }) && plugin.m_historyStore.Checkpoint(true), "Cannot prime process checkpoint");
+    plugin.m_networkStore.Initialize(fixture.wstring());
+    plugin.m_networkCollector.SelectAdapter(L"UnavailableTestAdapter");
+    const std::uint64_t base = 13359081600000ULL;
+    Check(plugin.m_networkStore.Add({ base, base + 1000, 100, 10, L"Fixture", false }) &&
+        plugin.m_networkStore.Flush(), "Cannot prime adapter checkpoint");
+    Check(plugin.m_networkStore.Add({ base + 1000, base + 2000, 200, 20, L"Fixture", false }), "Cannot add pending adapter delta");
+    plugin.m_historyInitialized = true;
+    plugin.DataRequired(); // The only host callback; all later work must run independently.
+    Traffic::NetworkEvent event;
+    event.key.pid = 4294967293u; event.key.family = 4; event.key.protocol = 17;
+    event.timestamp = Traffic::FileTimeNow(); event.send = true; event.bytes = 5678;
+    plugin.m_collector.m_etw.m_eventSink(plugin.m_collector.m_etw.m_eventContext, event);
+    PumpUntil([&] {
+        std::lock_guard<std::mutex> lock(plugin.m_historyMutex);
+        return plugin.m_historyStore.GetAllTimeTotal().txBytes >= 5678 &&
+            !plugin.m_historyStore.m_checkpointDirty && !plugin.m_historyStore.m_stateDirty &&
+            !plugin.m_networkStore.m_dirty;
+    }, 4000);
+    std::ofstream(fixture / L"ready") << "completed tick persisted\n";
+    if (abrupt) Sleep(INFINITE);
+    // Deliberately no Stop(), final checkpoint or plugin destructor.
+}
+
+void CheckExitRecovery(const std::filesystem::path& fixture)
+{
+    wchar_t executable[MAX_PATH]{};
+    Check(GetModuleFileNameW(nullptr, executable, MAX_PATH) != 0, "Cannot locate child test executable");
+    for (const bool abrupt : { false, true })
+    {
+        const auto root = std::filesystem::absolute(fixture / (abrupt ? L"terminated" : L"normal-exit"));
+        auto command = L"\"" + std::wstring(executable) + L"\" --checkpoint-child \"" + root.wstring() +
+            (abrupt ? L"\" abrupt" : L"\" normal");
+        STARTUPINFOW startup{ sizeof(startup) };
+        PROCESS_INFORMATION child{};
+        Check(CreateProcessW(executable, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+            &startup, &child) != FALSE, "Cannot start checkpoint child");
+        CloseHandle(child.hThread);
+        try
+        {
+            const auto deadline = GetTickCount64() + 10000;
+            while (!std::filesystem::exists(root / L"ready") && GetTickCount64() < deadline &&
+                WaitForSingleObject(child.hProcess, 25) == WAIT_TIMEOUT) {}
+            Check(std::filesystem::exists(root / L"ready"), "Child did not persist a completed independent tick");
+            if (abrupt) Check(TerminateProcess(child.hProcess, 97) != FALSE, "Cannot terminate checkpoint child");
+            Check(WaitForSingleObject(child.hProcess, 5000) == WAIT_OBJECT_0, "Checkpoint child did not exit");
+            DWORD result{};
+            Check(GetExitCodeProcess(child.hProcess, &result) && result == (abrupt ? 97u : 0u), "Checkpoint child failed");
+        }
+        catch (...) { TerminateProcess(child.hProcess, 98); WaitForSingleObject(child.hProcess, 5000); CloseHandle(child.hProcess); throw; }
+        CloseHandle(child.hProcess);
+        CHistoryTrafficStore process;
+        process.Initialize(root.wstring());
+        CHistoryTrafficStore::DateTimeRange range;
+        GetLocalTime(&range.start); range.start.wHour = range.start.wMinute = 0;
+        GetLocalTime(&range.end);
+        const auto apps = process.GetRangeAppTotals(range);
+        CHistoryTrafficStore::TrafficAmount target{};
+        for (const auto& app : apps)
+            if (app.appName == L"PID4294967293") { target.rxBytes += app.rxTotalBytes; target.txBytes += app.txTotalBytes; }
+        Check(target.rxBytes == 1234 && target.txBytes == 5678,
+            "Process checkpoint did not survive exit without a destructor exactly once");
+        CNetworkTrafficStore network;
+        network.Initialize(root.wstring());
+        const auto total = network.GetAllTimeTotal();
+        Check(total.rxBytes == 300 && total.txBytes == 30 && network.Healthy(),
+            "Adapter checkpoint did not survive exit without a destructor exactly once");
+    }
+    std::cout << "PASS: normal process exit and TerminateProcess recover both completed checkpoints without plugin destruction\n";
+}
 }
 
 int wmain(int argc, wchar_t** argv)
@@ -736,6 +897,11 @@ int wmain(int argc, wchar_t** argv)
     try
     {
         auto& plugin = CProcNetPlugin::Instance();
+        if (argc == 4 && std::wstring(argv[1]) == L"--checkpoint-child")
+        {
+            CheckpointExitChild(plugin, argv[2], std::wstring(argv[3]) == L"abrupt");
+            return 0;
+        }
         const bool ui_only = argc == 2 && std::wstring(argv[1]) == L"--ui-only";
         if (argc == 2 && !ui_only)
         {
@@ -765,9 +931,15 @@ int wmain(int argc, wchar_t** argv)
             CheckSorting(plugin);
             CheckSummaries(fixture / L"summaries");
             CheckNetworkView(plugin, fixture);
+            CheckAdapterSwitchFailure(plugin, fixture / L"adapter-switch");
             CheckUnicodeState(fixture / L"unicode");
             CheckIntegerFormatting();
-            if (!ui_only) CheckPausedCheckpoint(plugin, fixture / L"paused-checkpoint");
+            if (!ui_only)
+            {
+                CheckPausedCheckpoint(plugin, fixture / L"paused-checkpoint");
+                CheckCheckpointRetry(plugin, fixture / L"checkpoint-retry");
+                CheckExitRecovery(fixture / L"exit-recovery");
+            }
         }
         CloseHandle(iconGate);
         return 0;
