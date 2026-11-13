@@ -46,13 +46,13 @@ If you do not want to build the plugin yourself, you can download the prebuilt p
 
 ## Adapter Statistics And Minute History
 
-- Adapter sampling runs on the independent collection schedule, targeting roughly one second. Suspending host data requests or pausing UI refresh does not stop sampling.
-- Automatic selection compares traffic increments between valid adjacent observations and prefers physical adapters. A working adapter is reconsidered after at least 30 idle seconds when another adapter has new traffic, not based on boot-time totals.
+- Adapter sampling runs on the independent collection schedule, targeting roughly one sample per second. Suspending host data requests or pausing UI refresh does not stop sampling.
+- Automatic selection compares traffic increments between valid adjacent observations and prefers physical adapters. A working adapter is reconsidered only after at least 30 idle seconds and when another adapter has new traffic, rather than based on cumulative traffic since boot.
 - Adapter and history-directory switches first commit existing data. Failed persistence rejects the switch and retains the original state and pending bytes for retry.
 - Each completed collection tick checkpoints pending adapter and process history, including retries on idle ticks, instead of waiting 9-10 seconds. Minute coalescing is retained; this does not add per-second history records.
 - API 7 has no safe exit callback. The module remains pinned and persistence does not depend on the plugin destructor. Unfinished samples, scheduling delays or persistent write failures can still lose recent data on exit; zero loss is not guaranteed.
 - Process state, checkpoints, the app dictionary, commit markers and summaries explicitly flush file buffers before replacing existing files. A failed flush preserves the original file and reports failure rather than treating a completed stream write as durable storage.
-- State files now include an integrity checksum while remaining compatible with legacy unsigned state. Corrupt state, process checkpoints or commit markers are preserved unchanged in a `recovery/` subdirectory of their respective folders before rebuilding totals from trusted records and resuming collection. Lost pending bytes are not retained as valid cumulative traffic; commit IDs prevent replay of stale checkpoints.
+- State files now include an integrity checksum while remaining compatible with legacy state files without checksums. When state, process checkpoints or commit markers are corrupt, recovery-related files are preserved unchanged in a `recovery/` subdirectory of their respective folders before rebuilding totals from trusted history and resuming collection. Pending traffic that has been lost is not retained as valid cumulative traffic in the state cache. Valid checkpoints are deduplicated by commit ID so stale checkpoints are not counted again.
 - Damaged network checkpoints preserve the original file and recover only the complete, individually validated prefix. Diagnostics retain a recovery notice; missing traffic is never estimated. Failed quarantine, damaged app dictionaries or conflicts between append journals and raw history still block unsafe writes and require manual recovery.
 - Failed writes retain pending data in memory for retry; state is not saved ahead of a failed checkpoint. Tests cover zero-filled files, truncation, checksum failures, missing/stale checkpoints, repeated restarts and forced process termination. These are not physical power-cut tests: hardware failures, unflushed data and traffic not yet sampled cannot be guaranteed recoverable.
 - Consecutive short samples within a minute are merged. Samples crossing a minute boundary and long intervals retain their actual endpoints; bytes are never distributed proportionally.
@@ -65,18 +65,17 @@ If you do not want to build the plugin yourself, you can download the prebuilt p
 
 ## V2 Connection-Level Hybrid Collection
 
-- Native IPv4/IPv6 EStats enables only `TcpConnectionEstatsData`. No extra driver, service or runtime is required. ETW continues when EStats cannot be enabled.
+- EStats uses native Windows IPv4/IPv6 APIs, with only `TcpConnectionEstatsData` enabled. No extra driver, service or runtime is required. ETW continues when EStats cannot be enabled.
 - Connection tables are checked every 500 ms, with counter reads targeting one second, independently of UI refresh. Initial observations, counter rollback and recovery after failed sampling establish new baselines rather than backfilling unknown intervals.
 - Native TCP endpoint, lifecycle and sequence events verify the handoff. A complete ETW prefix must agree with two stable native snapshots; previously credited bytes are not replayed. Missing identity, sequence origins or boundary evidence denies the switch.
-- Failed, stale or inconsistent EStats reads fall back to verified uncredited ETW sequence ranges. Overlaps and SYN/FIN sequence space are excluded; unresolved coverage is marked incomplete, never estimated or filled from adapter totals.
+- If EStats reads fail, time out or disagree with verified sequence positions, accounting falls back to ETW sequence ranges known not to have been counted. Duplicate ranges and SYN/FIN control sequence numbers are excluded; unresolved portions are explicitly marked incomplete rather than estimated.
 - History commits and checkpoints run on the independent collection schedule, without host/UI callbacks. Failed writes retry the same batch instead of accumulating it again.
 - Identities include endpoints, IPv6 scopes, PID, process creation time and a connection generation. `TCP_TABLE_OWNER_MODULE_ALL` supplies both owning PID and connection creation time for stronger tuple-reuse validation than a PID-only table.
 - New history distinguishes same-name applications by full executable path. Unknown ownership retains its bytes under anonymous PID entries; hiding those rows does not change totals.
-- Legacy history is retained. New records reuse daily TSV files and the dictionary; state records the first V2 observation. Checksummed daily `.quality.tsv` files record source, confidence and observed event endpoints, not minute coverage or another additive traffic ledger.
+- Legacy history is retained. New records reuse daily TSV files and the existing dictionary; state records the timestamp of the first V2 record. Checksummed daily `.quality.tsv` files record source, confidence and actual event time ranges, not minute coverage or another additive traffic ledger.
 - Corrupt provenance marks source/completeness unknown without modifying valid bytes. Legacy records are not backfilled or presented as V2 observations.
 - New checkpoints and append transactions carry unique commit IDs and checksums. Legitimate identical traffic in one minute is not mistaken for a replay; conflicting recovery preserves existing files and reports an error.
-- Diagnostics reports ETW loss/parsing failures, EStats enable/read failures, actual source switches, fallbacks, incomplete intervals, unknown bytes and history write health. Zero-byte uncertainty markers are persisted too. Pausing refresh affects the UI only.
-- Release x64 emits a linker map and fails if the DLL reaches **610,000 bytes**. API 7 has no unload callback, so collection pins the module; exit TrafficMonitor to fully unload it.
+- The Diagnostics view shows ETW loss/parsing failures, EStats enable/read failures, actual source switches, fallbacks, incomplete intervals, unattributed bytes and history write health. Anomaly markers with zero traffic are persisted too. Pausing refresh affects the UI only.
 
 ## Build
 
