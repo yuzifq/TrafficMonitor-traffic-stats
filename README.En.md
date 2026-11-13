@@ -51,6 +51,10 @@ If you do not want to build the plugin yourself, you can download the prebuilt p
 - Adapter and history-directory switches first commit existing data. Failed persistence rejects the switch and retains the original state and pending bytes for retry.
 - Each completed collection tick checkpoints pending adapter and process history, including retries on idle ticks, instead of waiting 9-10 seconds. Minute coalescing is retained; this does not add per-second history records.
 - API 7 has no safe exit callback. The module remains pinned and persistence does not depend on the plugin destructor. Unfinished samples, scheduling delays or persistent write failures can still lose recent data on exit; zero loss is not guaranteed.
+- Process state, checkpoints, the app dictionary, commit markers and summaries explicitly flush file buffers before replacing existing files. A failed flush preserves the original file and reports failure rather than treating a completed stream write as durable storage.
+- State files now include an integrity checksum while remaining compatible with legacy unsigned state. Corrupt state, process checkpoints or commit markers are preserved unchanged in a `recovery/` subdirectory of their respective folders before rebuilding totals from trusted records and resuming collection. Lost pending bytes are not retained as valid cumulative traffic; commit IDs prevent replay of stale checkpoints.
+- Damaged network checkpoints preserve the original file and recover only the complete, individually validated prefix. Diagnostics retain a recovery notice; missing traffic is never estimated. Failed quarantine, damaged app dictionaries or conflicts between append journals and raw history still block unsafe writes and require manual recovery.
+- Failed writes retain pending data in memory for retry; state is not saved ahead of a failed checkpoint. Tests cover zero-filled files, truncation, checksum failures, missing/stale checkpoints, repeated restarts and forced process termination. These are not physical power-cut tests: hardware failures, unflushed data and traffic not yet sampled cannot be guaranteed recoverable.
 - Consecutive short samples within a minute are merged. Samples crossing a minute boundary and long intervals retain their actual endpoints; bytes are never distributed proportionally.
 - Network range totals include only records fully contained in the selected range. Boundary bytes are shown separately and excluded from those totals.
 - Sample coverage distinguishes missing observations from measured zero traffic. Long sampling intervals are flagged.
@@ -72,7 +76,7 @@ If you do not want to build the plugin yourself, you can download the prebuilt p
 - Corrupt provenance marks source/completeness unknown without modifying valid bytes. Legacy records are not backfilled or presented as V2 observations.
 - New checkpoints and append transactions carry unique commit IDs and checksums. Legitimate identical traffic in one minute is not mistaken for a replay; conflicting recovery preserves existing files and reports an error.
 - Diagnostics reports ETW loss/parsing failures, EStats enable/read failures, actual source switches, fallbacks, incomplete intervals, unknown bytes and history write health. Zero-byte uncertainty markers are persisted too. Pausing refresh affects the UI only.
-- Release x64 emits a linker map and fails if the DLL reaches **600,000 bytes**. API 7 has no unload callback, so collection pins the module; exit TrafficMonitor to fully unload it.
+- Release x64 emits a linker map and fails if the DLL reaches **610,000 bytes**. API 7 has no unload callback, so collection pins the module; exit TrafficMonitor to fully unload it.
 
 ## Build
 

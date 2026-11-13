@@ -19,11 +19,21 @@
 
 SYSTEMTIME fakeNow{ 2026, 10, 5, 16, 10, 0, 0, 0 };
 void WINAPI FixtureLocalTime(SYSTEMTIME* value) { *value = fakeNow; }
+bool rejectFileFlush{};
+unsigned fileFlushCalls{};
+BOOL WINAPI FixtureFileFlush(HANDLE file)
+{
+    ++fileFlushCalls;
+    if (rejectFileFlush) { SetLastError(ERROR_WRITE_FAULT); return FALSE; }
+    return FlushFileBuffers(file);
+}
 #define private public
 #include "../ProcessTrafficPlugin/HistoryTrafficStore.h"
 #undef private
 #define GetLocalTime FixtureLocalTime
+#define FlushFileBuffers FixtureFileFlush
 #include "../ProcessTrafficPlugin/HistoryTrafficStore.cpp"
+#undef FlushFileBuffers
 #undef GetLocalTime
 
 namespace
@@ -36,6 +46,14 @@ std::string Contents(const std::filesystem::path& path)
 {
     std::ifstream input(path, std::ios::binary);
     return { std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
+}
+bool Preserved(const std::filesystem::path& path, const std::string& contents)
+{
+    const auto directory = path.parent_path() / L"recovery";
+    if (!std::filesystem::exists(directory)) return false;
+    for (const auto& file : std::filesystem::directory_iterator(directory))
+        if (file.path().filename().wstring().rfind(path.filename().wstring() + L".", 0) == 0 && Contents(file.path()) == contents) return true;
+    return false;
 }
 CHistoryTrafficStore::DateTimeRange Day()
 {
@@ -423,6 +441,61 @@ void CommitMarkerFailure(const std::filesystem::path& fixture)
         "Restart after marker failure repeated appended bytes or lost the unaccepted batch");
     std::cout << "PASS: append completed but commit marker failed; restart resumes marker without repeated traffic\n";
 }
+void DurableReplacement(const std::filesystem::path& fixture)
+{
+    CHistoryTrafficStore store;
+    store.Initialize(fixture.wstring());
+    Check(store.Update({ App(13, 17) }) && store.Checkpoint(true), "Cannot seed durable replacement fixture");
+    const auto root = fixture / L"app_traffic_history";
+    const auto marker = root / L"current.commit";
+    Check(WriteCommittedMinute(marker.wstring(), L"2026-10-16 09:00", 1), "Cannot seed durable marker");
+    const auto checkpoint = root / L"current.tmp", dictionary = root / L"apps.tsv", state = fixture / L"app_traffic_state.tsv";
+    const auto oldCheckpoint = Contents(checkpoint), oldDictionary = Contents(dictionary), oldState = Contents(state), oldMarker = Contents(marker);
+    const auto calls = fileFlushCalls;
+    rejectFileFlush = true;
+    try
+    {
+        Check(!store.SaveCheckpoint() && !store.SaveAppDictionary() && !store.SaveState() &&
+            !WriteCommittedMinute(marker.wstring(), L"2026-10-16 10:00", 2), "A failed file flush published a replacement");
+        Check(fileFlushCalls == calls + 4 && Contents(checkpoint) == oldCheckpoint && Contents(dictionary) == oldDictionary &&
+            Contents(state) == oldState && Contents(marker) == oldMarker, "Flush failure changed an existing valid file");
+    }
+    catch (...) { rejectFileFlush = false; throw; }
+    rejectFileFlush = false;
+    Check(store.SaveCheckpoint() && store.SaveAppDictionary() && store.SaveState() &&
+        WriteCommittedMinute(marker.wstring(), L"2026-10-16 10:00", 2), "File replacement did not retry after flush recovery");
+    Check(fileFlushCalls == calls + 8, "A critical replacement bypassed FlushFileBuffers");
+    std::cout << "PASS: checkpoint, dictionary, state and marker flush before replacement; failed flush preserves originals and retries\n";
+}
+
+void ZeroedRestartFiles(const std::filesystem::path& fixture)
+{
+    CHistoryTrafficStore store;
+    store.Initialize(fixture.wstring());
+    Check(store.Update({ App(13, 17) }) && store.FlushCurrentMinute() && store.Update({ App(3, 5) }) && store.Checkpoint(true),
+        "Cannot seed zero-filled restart fixture");
+    const auto root = fixture / L"app_traffic_history";
+    const auto raw = root / L"2026/10/2026-10-16.tsv";
+    const auto checkpoint = root / L"current.tmp", state = fixture / L"app_traffic_state.tsv";
+    const auto original = Contents(raw), dictionary = Contents(root / L"apps.tsv");
+    const std::string zeroCheckpoint(Contents(checkpoint).size(), '\0'), zeroState(Contents(state).size(), '\0');
+    std::ofstream(checkpoint, std::ios::binary | std::ios::trunc) << zeroCheckpoint;
+    std::ofstream(state, std::ios::binary | std::ios::trunc) << zeroState;
+    CHistoryTrafficStore repaired;
+    repaired.Initialize(fixture.wstring());
+    Check(repaired.GetAllTimeTotal().rxBytes == 13 && repaired.GetAllTimeTotal().txBytes == 17 && repaired.IsReady() &&
+        repaired.IsAllTimeHealthy() && Contents(raw) == original && Contents(root / L"apps.tsv") == dictionary &&
+        Preserved(checkpoint, zeroCheckpoint) && Preserved(state, zeroState) && Utils::HasHistoryRecovery(fixture.wstring()),
+        "Automatic quarantine did not preserve evidence and rebuild exact committed totals");
+    Check(repaired.Update({ App(1, 2) }) && repaired.Checkpoint(true), "Fresh collection failed after automatic recovery");
+    CHistoryTrafficStore restarted;
+    restarted.Initialize(fixture.wstring());
+    Check(restarted.GetAllTimeTotal().rxBytes == 14 && restarted.GetAllTimeTotal().txBytes == 19 &&
+        Contents(raw) == original && Preserved(checkpoint, zeroCheckpoint),
+        "Repaired restart invented missing bytes, replayed old traffic or changed preserved evidence");
+    std::cout << "PASS: all-zero state/checkpoint automatically quarantined; exact committed totals rebuilt and collection resumes\n";
+}
+
 void TransactionChecksum(const std::filesystem::path& fixture, bool marker)
 {
     fakeNow.wHour = 17; fakeNow.wMinute = 0;
@@ -446,16 +519,125 @@ void TransactionChecksum(const std::filesystem::path& fixture, bool marker)
     const auto before = Contents(checkpoint);
     CHistoryTrafficStore recovered;
     recovered.Initialize(fixture.wstring());
+    const auto expected = marker ? 13ULL : 0ULL;
+    Check(recovered.GetAllTimeTotal().rxBytes == expected && recovered.IsReady() &&
+        Preserved(path, text) && Preserved(checkpoint, before) && recovered.Update({ App(1, 2) }) && recovered.Checkpoint(true),
+        "Corrupted transaction metadata was guessed, replayed, or blocked future collection");
+    CHistoryTrafficStore twice;
+    twice.Initialize(fixture.wstring());
+    Check(twice.GetAllTimeTotal().rxBytes == expected + 1, "Recovered transaction replayed after another restart");
+    std::cout << "PASS: " << (marker ? "commit marker" : "checkpoint") << " checksum failure preserves evidence, rebuilds totals and resumes without replay\n";
+}
+
+void StateIntegrity(const std::filesystem::path& fixture, unsigned kind)
+{
+    CHistoryTrafficStore store;
+    store.Initialize(fixture.wstring());
+    Check(store.Update({ App(13, 17) }) && store.FlushCurrentMinute() && store.Update({ App(3, 5) }) && store.Checkpoint(true),
+        "Cannot seed state integrity test");
+    const auto path = fixture / L"app_traffic_state.tsv";
+    auto damaged = Contents(path);
+    if (kind == 0) damaged[damaged.find("all_time\t") + 9] = '9';
+    else if (kind == 1) damaged.resize(damaged.find("checksum\t"));
+    else
+    {
+        const auto begin = damaged.find("state_checksum_version\t");
+        damaged.erase(begin, damaged.find('\n', begin) + 1 - begin);
+        damaged.resize(damaged.find("checksum\t"));
+    }
+    std::ofstream(path, std::ios::binary | std::ios::trunc) << damaged;
+    CHistoryTrafficStore recovered;
+    recovered.Initialize(fixture.wstring());
+    Check(recovered.GetAllTimeTotal().rxBytes == 16 && recovered.GetRangeTotal(Day()).txBytes == 22 && recovered.IsReady(),
+        "State checksum/truncation recovery lost valid pending bytes or inflated totals");
+    Check(kind == 2 ? !Preserved(path, damaged) : Preserved(path, damaged), "Legacy state compatibility or corrupt state isolation failed");
+    Check(recovered.Update({ App(1, 2) }) && recovered.Checkpoint(true), "Cannot persist after state recovery");
+    CHistoryTrafficStore twice;
+    twice.Initialize(fixture.wstring());
+    Check(twice.GetAllTimeTotal().rxBytes == 17 && twice.GetAllTimeTotal().txBytes == 24, "State recovery repeated pending bytes");
+    std::cout << "PASS: state " << kind << " integrity, legacy compatibility and repeated restart\n";
+}
+
+void QuarantineFailure(const std::filesystem::path& fixture)
+{
+    CHistoryTrafficStore store;
+    store.Initialize(fixture.wstring());
+    Check(store.Update({ App(13, 17) }) && store.FlushCurrentMinute() && store.Update({ App(3, 5) }) && store.Checkpoint(true), "Cannot seed quarantine failure");
+    const auto state = fixture / L"app_traffic_state.tsv", checkpoint = fixture / L"app_traffic_history/current.tmp";
+    const auto before = Contents(state);
+    const std::string damaged(128, '\0');
+    std::ofstream(checkpoint, std::ios::binary | std::ios::trunc) << damaged;
+    const auto locked = CreateFileW(state.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    Check(locked != INVALID_HANDLE_VALUE, "Cannot lock recovery source");
+    CHistoryTrafficStore recovered;
+    recovered.Initialize(fixture.wstring());
     recovered.GetAllTimeTotal();
-    Check(!recovered.IsReady() && !recovered.IsWriteHealthy() && !recovered.Update({ App(1, 2) }) && Contents(checkpoint) == before,
-        "Corrupted transaction metadata was guessed, replayed or silently discarded");
-    std::cout << "PASS: " << (marker ? "commit marker" : "checkpoint") << " transaction checksum detects valid-number corruption and preserves pending bytes\n";
+    const bool safe = !recovered.IsReady() && !recovered.Update({ App(1, 2) }) && Contents(state) == before && Contents(checkpoint) == damaged;
+    CloseHandle(locked);
+    Check(safe, "Failed quarantine overwrote evidence or accepted traffic");
+    Check(recovered.GetAllTimeTotal().rxBytes == 13 && recovered.IsReady() && recovered.Update({ App(1, 2) }) && recovered.Checkpoint(true),
+        "Recovery failed to retry after the lock was released, or kept uncommitted cached totals");
+    std::cout << "PASS: quarantine failure preserves originals; retry excludes lost pending bytes from otherwise valid state\n";
+}
+
+void MissingOrStaleCheckpoint(const std::filesystem::path& fixture, unsigned kind)
+{
+    CHistoryTrafficStore store;
+    store.Initialize(fixture.wstring());
+    Check(store.Update({ App(13, 17) }) && store.Checkpoint(true), "Cannot seed stale checkpoint");
+    const auto checkpoint = fixture / L"app_traffic_history/current.tmp", state = fixture / L"app_traffic_state.tsv";
+    const auto previous = Contents(checkpoint);
+    if (kind == 2)
+        Check(store.Update({ App(3, 5) }) && store.Checkpoint(true), "Cannot advance same transaction checkpoint");
+    else
+        Check(store.FlushCurrentMinute() && store.Update({ App(3, 5) }) && store.Checkpoint(true), "Cannot advance checkpoint transaction");
+    const auto savedState = Contents(state);
+    if (kind == 0) std::filesystem::remove(checkpoint);
+    else
+    {
+        if (kind == 1) Check(store.FlushCurrentMinute(), "Cannot commit newer transaction");
+        std::ofstream(checkpoint, std::ios::binary | std::ios::trunc) << previous;
+    }
+    CHistoryTrafficStore recovered;
+    recovered.Initialize(fixture.wstring());
+    const auto expected = kind == 1 ? 16ULL : 13ULL;
+    Check(recovered.GetAllTimeTotal().rxBytes == expected && recovered.GetRangeTotal(Day()).rxBytes == expected && recovered.IsReady(),
+        "Missing/stale checkpoint repeated committed bytes or retained unrecorded cached traffic");
+    if (kind != 1) Check(Preserved(state, savedState), "State containing lost pending bytes was not preserved");
+    Check(recovered.Update({ App(1, 2) }) && recovered.Checkpoint(true), "Cannot collect after missing/stale checkpoint");
+    CHistoryTrafficStore twice;
+    twice.Initialize(fixture.wstring());
+    Check(twice.GetAllTimeTotal().rxBytes == expected + 1 && twice.GetRangeTotal(Day()).rxBytes == expected + 1,
+        "Missing/stale checkpoint recovery was not restart-idempotent");
+    std::cout << "PASS: missing/stale checkpoint " << kind << " reconciles durable totals without replay or cached lost bytes\n";
 }
 }
 int main(int argc, char** argv)
 {
     try
     {
+        if (argc == 3 && (std::string(argv[1]) == "--inspect-store" || std::string(argv[1]) == "--rebuild-state"))
+        {
+            ::GetLocalTime(&fakeNow);
+            CHistoryTrafficStore store;
+            store.Initialize(std::filesystem::u8path(argv[2]).wstring());
+            const auto all = store.GetAllTimeTotal();
+            auto range = Day(); range.start.wMonth = range.start.wDay = 1;
+            const auto rows = store.GetRangeAppTotals(range);
+            CHistoryTrafficStore::TrafficAmount verified{};
+            for (const auto& row : rows) { verified.rxBytes += row.rxTotalBytes; verified.txBytes += row.txTotalBytes; }
+            std::cout << "ready=" << store.IsReady() << " all_healthy=" << store.IsAllTimeHealthy() << " range_healthy=" << store.IsRangeHealthy(range)
+                << " rows=" << rows.size() << " rx=" << all.rxBytes << " tx=" << all.txBytes
+                << " year_rx=" << verified.rxBytes << " year_tx=" << verified.txBytes << '\n';
+            if (!store.IsReady() || !store.IsAllTimeHealthy() || !store.IsRangeHealthy(range)) return 2;
+            if (std::string(argv[1]) == "--rebuild-state")
+            {
+                store.SetPreferredLanguage(CHistoryTrafficStore::DisplayLanguage::Chinese);
+                store.SetPreferredRange({ Day().start, fakeNow });
+                Check(store.SaveState(), "Cannot persist rebuilt state preferences");
+            }
+            return 0;
+        }
         if (argc == 3 && std::string(argv[1]) == "--reset-fixture")
         {
             const auto fixture = std::filesystem::u8path(argv[2]);
@@ -493,8 +675,17 @@ int main(int argc, char** argv)
         InterruptedAppend(root / L"append-corrupt", 2);
         SameMinuteTransactions(root / L"same-minute");
         CommitMarkerFailure(root / L"commit-marker");
+        DurableReplacement(root / L"durable-replacement");
+        ZeroedRestartFiles(root / L"zeroed-restart");
         TransactionChecksum(root / L"checkpoint-checksum", false);
         TransactionChecksum(root / L"marker-checksum", true);
+        StateIntegrity(root / L"state-number", 0);
+        StateIntegrity(root / L"state-truncated", 1);
+        StateIntegrity(root / L"state-legacy", 2);
+        QuarantineFailure(root / L"quarantine-failure");
+        MissingOrStaleCheckpoint(root / L"missing-checkpoint", 0);
+        MissingOrStaleCheckpoint(root / L"older-committed-checkpoint", 1);
+        MissingOrStaleCheckpoint(root / L"older-pending-checkpoint", 2);
         return 0;
     }
     catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }

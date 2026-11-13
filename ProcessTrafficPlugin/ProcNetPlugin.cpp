@@ -414,6 +414,9 @@ std::wstring CProcNetPlugin::BuildDiagnosticsText(CHistoryTrafficStore::DisplayL
     text += GetLocalizedText(language, { L"\r\nNetwork history: ", L"\r\n网卡历史保存: " });
     text += m_networkStore.Healthy() ? GetLocalizedText(language, { L"OK", L"正常" }) :
         GetLocalizedText(language, { L"Write failed; retry pending", L"写入失败，等待重试" });
+    if (Utils::HasHistoryRecovery(m_historyStore.GetStorageDirectory()))
+        text += GetLocalizedText(language, { L"\r\nRecovery files preserved in recovery folders; some traffic may be missing.",
+            L"\r\n已在 recovery 文件夹保留恢复文件；部分流量可能缺失。" });
     const auto metadata = m_historyStore.GetEngineMetadata(m_historyStore.GetPreferredRange());
     text += L"\r\n";
     if (metadata.cutover)

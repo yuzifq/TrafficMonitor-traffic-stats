@@ -316,12 +316,18 @@ bool CNetworkTrafficStore::SaveCheckpoint()
 
 void CNetworkTrafficStore::RecoverCheckpoint()
 {
-    std::ifstream input(m_root / L"pending.tsv", std::ios::binary);
-    if (!input) return;
+    const auto path = m_root / L"pending.tsv";
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+    {
+        std::error_code error;
+        if (std::filesystem::exists(path, error) || error) m_writeHealthy = !(m_checkpointCorrupt = true);
+        return;
+    }
     std::string line;
-    if (!std::getline(input, line) || line != "network\t1") { m_writeHealthy = false; m_checkpointCorrupt = true; return; }
+    m_checkpointCorrupt = !std::getline(input, line) || line != "network\t1";
     U64 previous{};
-    while (std::getline(input, line))
+    while (!m_checkpointCorrupt && std::getline(input, line))
     {
         Record record;
         if (input.eof() || !Decode(line, record) || record.id <= previous)
@@ -329,6 +335,16 @@ void CNetworkTrafficStore::RecoverCheckpoint()
         previous = record.id;
         m_nextId = (std::max)(m_nextId, record.id + 1);
         m_pending.push_back(std::move(record));
+    }
+    if (input.bad()) { m_writeHealthy = false; m_checkpointCorrupt = true; return; }
+    input.close();
+    if (m_checkpointCorrupt)
+    {
+        // Each complete record has its own checksum. Keep only the validated
+        // prefix, preserving the original file before any retry can replace it.
+        if (!Utils::QuarantineHistoryFile(path.wstring())) { m_writeHealthy = false; return; }
+        m_checkpointCorrupt = false;
+        m_writeHealthy = true;
     }
     m_dirty = true;
 }

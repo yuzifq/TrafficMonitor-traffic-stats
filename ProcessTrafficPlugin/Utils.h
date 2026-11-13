@@ -15,4 +15,6 @@ std::wstring FormatDateTime(const _SYSTEMTIME& time, bool seconds = false, wchar
 std::wstring ShortLabel(const std::wstring& exe_name, bool is_download);
 std::wstring GetHistoryDirectory();
 bool IsProtectedHistoryPath(const std::wstring& base_dir, const std::wstring& output_path);
+bool QuarantineHistoryFile(const std::wstring& path);
+bool HasHistoryRecovery(const std::wstring& base_dir);
 }

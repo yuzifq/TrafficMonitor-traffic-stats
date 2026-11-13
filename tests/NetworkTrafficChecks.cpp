@@ -276,8 +276,33 @@ void CheckStore(const std::filesystem::path& fixture)
     Store damaged;
     damaged.Initialize(corrupt_fixture.wstring());
     damaged.Add({ base, base + 1000, 10, 1, L"A", false });
-    Check(!damaged.Flush(true) && !damaged.Healthy() && Read(corrupt_path) == "damaged checkpoint\n",
-        "Damaged recovery data was silently overwritten");
+    bool preserved = false;
+    for (const auto& file : std::filesystem::directory_iterator(corrupt_path.parent_path() / L"recovery"))
+        preserved |= Read(file.path()) == "damaged checkpoint\n";
+    Check(preserved && damaged.Flush(true) && damaged.Healthy() && damaged.GetAllTimeTotal().rxBytes == 10,
+        "Damaged network checkpoint blocked new collection or its evidence was lost");
+    Store retried;
+    retried.Initialize(corrupt_fixture.wstring());
+    Check(retried.GetAllTimeTotal().rxBytes == 10, "Recovered network checkpoint replayed new bytes");
+    const auto partial_fixture = fixture / L"partial-checkpoint";
+    Store partial_checkpoint;
+    partial_checkpoint.Initialize(partial_fixture.wstring());
+    Check(partial_checkpoint.Add({ base, base + 1000, 13, 17, L"A", false }) && partial_checkpoint.Flush(), "Cannot seed partial network checkpoint");
+    const auto partial_path = partial_fixture / L"network_traffic_history/pending.tsv";
+    const auto partial_text = Read(partial_path) + "incomplete record";
+    Write(partial_path, partial_text);
+    Store prefix;
+    Check(prefix.Initialize(partial_fixture.wstring()) && prefix.GetAllTimeTotal().rxBytes == 13 &&
+        prefix.Add({ base + 1000, base + 2000, 3, 5, L"A", false }) && prefix.Flush(true),
+        "Validated network prefix was lost or collection could not resume");
+    Store prefix_twice;
+    prefix_twice.Initialize(partial_fixture.wstring());
+    Check(prefix_twice.GetAllTimeTotal().rxBytes == 16 && prefix_twice.GetAllTimeTotal().txBytes == 22,
+        "Recovered partial network checkpoint was repeated on second restart");
+    bool prefix_preserved = false;
+    for (const auto& file : std::filesystem::directory_iterator(partial_path.parent_path() / L"recovery"))
+        prefix_preserved |= Read(file.path()) == partial_text;
+    Check(prefix_preserved, "Partial network checkpoint evidence was changed");
     std::cout << "PASS: minute boundaries, missing/idle coverage, restart replay, summary fallback, partial-tail repair, locked writes/retry, preference, streaming export\n";
 }
 

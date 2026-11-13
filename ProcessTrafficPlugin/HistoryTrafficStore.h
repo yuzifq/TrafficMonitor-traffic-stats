@@ -95,7 +95,7 @@ private:
     bool AppendEngineMetadata();
     bool RecoverAppend();
     void ClearCheckpoint() const;
-    void LoadState();
+    bool LoadState();
     bool SaveState() const;
 
     static DateTimeRange GetDefaultRange();
@@ -127,7 +127,8 @@ private:
     std::wstring m_currentMinuteKey;
     BucketAppMap m_currentMinuteTotals;
     std::uint64_t m_currentCommitId{};
-    bool m_legacyCheckpoint{}, m_checkpointBlocked{};
+    std::uint64_t m_statePendingCommit{};
+    bool m_legacyCheckpoint{}, m_checkpointBlocked{}, m_checkpointReadFailed{};
     ULONGLONG m_lastCheckpointTick{};
     mutable std::unordered_map<std::wstring, BucketTimeRange> m_bucketTimeRangeByKey;
     std::unordered_map<std::wstring, std::uint64_t> m_appIdByName;

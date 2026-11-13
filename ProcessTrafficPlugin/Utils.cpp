@@ -135,7 +135,42 @@ bool Utils::IsProtectedHistoryPath(const std::wstring& base_dir, const std::wstr
             prefix.c_str(), static_cast<int>(prefix.size()), TRUE) != CSTR_EQUAL) return false;
     const auto relative = target.substr(prefix.size());
     const auto first = relative.substr(0, relative.find(L'\\'));
-    return _wcsicmp(first.c_str(), L"app_traffic_history") == 0 || _wcsicmp(first.c_str(), L"network_traffic_history") == 0 ||
+    return _wcsicmp(first.c_str(), L"recovery") == 0 ||
+        _wcsicmp(first.c_str(), L"app_traffic_history") == 0 || _wcsicmp(first.c_str(), L"network_traffic_history") == 0 ||
         _wcsnicmp(first.c_str(), L"app_traffic_state.tsv", 21) == 0 || _wcsnicmp(first.c_str(), L"history_traffic.dat", 19) == 0;
+}
+
+bool Utils::QuarantineHistoryFile(const std::wstring& path)
+{
+    std::error_code error;
+    if (!std::filesystem::exists(path, error)) return !error;
+    const auto source = std::filesystem::path(path);
+    const auto directory = source.parent_path() / L"recovery";
+    std::filesystem::create_directories(directory, error);
+    if (error) return false;
+    FILETIME time{};
+    GetSystemTimeAsFileTime(&time);
+    auto id = (static_cast<std::uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+    for (unsigned attempt = 0; attempt != 4; ++attempt, ++id)
+    {
+        const auto target = directory / (source.filename().wstring() + L"." + std::to_wstring(id));
+        // No replacement: recovery evidence must survive repeated startup attempts.
+        if (MoveFileExW(source.c_str(), target.c_str(), MOVEFILE_WRITE_THROUGH)) return true;
+        if (GetLastError() != ERROR_ALREADY_EXISTS && GetLastError() != ERROR_FILE_EXISTS) return false;
+    }
+    return false;
+}
+
+bool Utils::HasHistoryRecovery(const std::wstring& base_dir)
+{
+    for (const auto* relative : { L"recovery", L"app_traffic_history/recovery", L"network_traffic_history/recovery" })
+    {
+        const auto path = std::filesystem::path(base_dir) / relative;
+        const auto attributes = GetFileAttributesW(path.c_str());
+        std::error_code error;
+        if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) &&
+            !std::filesystem::is_empty(path, error) && !error) return true;
+    }
+    return false;
 }
 

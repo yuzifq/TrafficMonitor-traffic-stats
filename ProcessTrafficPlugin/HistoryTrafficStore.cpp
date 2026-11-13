@@ -548,26 +548,6 @@ void LogHistoryIoFailure(const wchar_t* operation, const std::wstring& path, DWO
     OutputDebugStringW(message.c_str());
 }
 
-void WriteUtf8StateLine(std::ofstream& output, const wchar_t* key, const std::wstring& value)
-{
-    WriteUtf8Line(output, std::wstring(key) + L"\t" + value);
-}
-
-void WriteUtf8StateLine(std::ofstream& output, const wchar_t* key, int value)
-{
-    WriteUtf8StateLine(output, key, std::to_wstring(value));
-}
-
-void WriteUtf8AllTimeEntry(std::ofstream& output, const CHistoryTrafficStore::TrafficAmount& amount)
-{
-    WriteUtf8Line(output, L"all_time\t" + std::to_wstring(amount.rxBytes) + L"\t" + std::to_wstring(amount.txBytes));
-}
-
-void WriteUtf8PathEntry(std::ofstream& output, const std::wstring& app_name, const std::wstring& exe_path)
-{
-    WriteUtf8Line(output, L"path\t" + SanitizeTsvField(app_name) + L"\t" + SanitizeTsvField(exe_path));
-}
-
 bool ReadCommittedMinute(const std::wstring& path, std::wstring& minute, std::uint64_t* transaction)
 {
     if (path.empty() || !std::filesystem::exists(path))
@@ -578,7 +558,12 @@ bool ReadCommittedMinute(const std::wstring& path, std::wstring& minute, std::ui
     std::wstring line, id;
     if (!ReadUtf8Line(input, line)) return false;
     TabReader fields(line);
-    if (!ReadTabField(fields, minute)) return false;
+    SYSTEMTIME date{};
+    std::uint64_t hour{}, minutes{};
+    if (!ReadTabField(fields, minute) || minute.size() != 16 ||
+        !TryParseDateKey(minute.substr(0, 10), date) || minute[10] != L' ' ||
+        minute[13] != L':' || !TryParseUInt64(minute.substr(11, 2), hour) || hour > 23 ||
+        !TryParseUInt64(minute.substr(14, 2), minutes) || minutes > 59) return false;
     *transaction = 0;
     if (ReadTabField(fields, id))
     {
@@ -590,15 +575,39 @@ bool ReadCommittedMinute(const std::wstring& path, std::wstring& minute, std::ui
     return true;
 }
 
+bool FlushAndReplace(const std::filesystem::path& temporary, const std::filesystem::path& destination)
+{
+    // Closing an iostream only drains its user-space buffer. Flush the file
+    // contents before publishing its replacement name, including same-volume moves.
+    const auto file = CreateFileW(temporary.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    const bool flushed = FlushFileBuffers(file) != FALSE;
+    const auto error = flushed ? ERROR_SUCCESS : GetLastError();
+    const bool closed = CloseHandle(file) != FALSE;
+    if (!flushed) { SetLastError(error); return false; }
+    return closed && MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+}
+
+bool FinishAtomicFile(std::ofstream& output, const std::filesystem::path& temporary,
+    const std::filesystem::path& destination)
+{
+    output.flush();
+    output.close();
+    if (output && FlushAndReplace(temporary, destination)) return true;
+    LogHistoryIoFailure(L"PublishFile", destination.wstring(), GetLastError());
+    std::error_code error;
+    std::filesystem::remove(temporary, error);
+    return false;
+}
+
 bool WriteCommittedMinute(const std::wstring& path, const std::wstring& minute, std::uint64_t transaction)
 {
     const auto temporary = path + L".new";
     std::ofstream output{ std::filesystem::path(temporary), std::ios::binary | std::ios::trunc };
     const auto text = minute + L"\t" + std::to_wstring(transaction);
     WriteUtf8Line(output, text + L"\t" + std::to_wstring(MetadataChecksum(text)));
-    output.flush();
-    output.close();
-    return output && MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    return FinishAtomicFile(output, temporary, path);
 }
 
 std::wstring FormatDateKey(const SYSTEMTIME& time)
@@ -1060,14 +1069,7 @@ bool WriteSummaryFileAtomic(
     }
     WriteUtf8Line(output, L"total\t" + FormatStoredAppId(summary.total.rxBytes) + L"\t" +
         FormatStoredAppId(summary.total.txBytes));
-    output.flush();
-    output.close();
-    if (!output || MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE)
-    {
-        std::filesystem::remove(temporary, error);
-        return false;
-    }
-    return true;
+    return FinishAtomicFile(output, temporary, path);
 }
 
 ULONGLONG SystemTimeValue(const SYSTEMTIME& time)
@@ -1594,7 +1596,7 @@ bool CHistoryTrafficStore::Checkpoint(bool force)
         healthy = SaveCheckpoint();
         if (healthy) { m_checkpointDirty = false; m_stateDirty = true; }
     }
-    if (m_stateDirty)
+    if (m_stateDirty && healthy)
     {
         if (SaveState()) m_stateDirty = false;
         else healthy = false;
@@ -2207,7 +2209,8 @@ void CHistoryTrafficStore::SetPreferredRange(const DateTimeRange& range)
     }
 
     m_preferredRange = normalized;
-    SaveState();
+    m_stateDirty = true;
+    Checkpoint(true);
 }
 
 CHistoryTrafficStore::DisplayLanguage CHistoryTrafficStore::GetPreferredLanguage() const
@@ -2226,7 +2229,8 @@ void CHistoryTrafficStore::SetPreferredLanguage(DisplayLanguage language)
     }
 
     m_preferredLanguage = language;
-    SaveState();
+    m_stateDirty = true;
+    Checkpoint(true);
 }
 
 bool CHistoryTrafficStore::RequiresAppDictionary() const
@@ -2266,7 +2270,7 @@ void CHistoryTrafficStore::EnsureLoaded()
         Initialize(Utils::GetHistoryDirectory());
     }
 
-    LoadState();
+    if (!LoadState()) { m_writeHealthy = false; return; }
     if (!LoadAppDictionary() && RequiresAppDictionary())
     {
         m_writeHealthy = m_historyReadHealthy = m_rangeHealthy = false;
@@ -2595,7 +2599,28 @@ void CHistoryTrafficStore::Load()
         m_allTimeCacheValid = true;
     }
     LoadCheckpoint();
-    if (m_checkpointBlocked) return;
+    if (m_checkpointReadFailed) { m_checkpointBlocked = true; return; }
+    std::wstring committed_minute;
+    std::uint64_t committed_id{};
+    const bool bad_marker = std::filesystem::exists(m_checkpointCommitPath) &&
+        !ReadCommittedMinute(m_checkpointCommitPath, committed_minute, &committed_id);
+    const bool missing_pending = m_statePendingCommit > committed_id && m_currentCommitId < m_statePendingCommit;
+    if (m_checkpointBlocked || bad_marker || missing_pending)
+    {
+        // Retire the cumulative cache first: it may include the rejected pending
+        // bytes. Never replay a checkpoint when its commit identity is unknown.
+        if (!Utils::QuarantineHistoryFile(m_stateFilePath) ||
+            !Utils::QuarantineHistoryFile(m_checkpointFilePath) ||
+            (bad_marker && !Utils::QuarantineHistoryFile(m_checkpointCommitPath)))
+        { m_checkpointBlocked = true; return; }
+        m_currentMinuteKey.clear();
+        m_currentMinuteTotals.clear();
+        m_currentCommitId = 0;
+        m_currentEngine = {};
+        m_checkpointBlocked = m_legacyCheckpoint = false;
+        m_hasPersistedAllTime = false;
+        m_cachedAllTimeTotal = {};
+    }
 
     if (!m_hasPersistedAllTime || m_allTimeRecoveryFormat < kCurrentAllTimeRecoveryFormat)
     {
@@ -2607,6 +2632,8 @@ void CHistoryTrafficStore::Load()
         m_allTimeRecoveryFormat = kCurrentAllTimeRecoveryFormat;
         if (!SaveState())
         {
+            m_stateDirty = true;
+            m_writeHealthy = false;
             LogHistoryIoFailure(L"RepairAllTime", m_stateFilePath, GetLastError());
         }
     }
@@ -2850,18 +2877,7 @@ bool CHistoryTrafficStore::SaveAppDictionary() const
         }
         output << "app\t" << WideToUtf8(FormatStoredAppId(entry.first)) << '\t' << utf8_name << '\n';
     }
-    output.flush();
-    output.close();
-    if (!output || MoveFileExW(
-            temporary.c_str(),
-            m_appDictionaryPath.c_str(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE)
-    {
-        std::error_code error;
-        std::filesystem::remove(temporary, error);
-        return false;
-    }
-    return true;
+    return FinishAtomicFile(output, temporary, m_appDictionaryPath);
 }
 
 std::uint64_t CHistoryTrafficStore::EnsureAppId(const std::wstring& app_name)
@@ -3089,7 +3105,7 @@ void CHistoryTrafficStore::LoadCheckpoint()
     m_currentMinuteKey.clear();
     m_currentMinuteTotals.clear();
     m_currentCommitId = 0;
-    m_legacyCheckpoint = m_checkpointBlocked = false;
+    m_legacyCheckpoint = m_checkpointBlocked = m_checkpointReadFailed = false;
     m_currentEngine = {};
     if (m_checkpointFilePath.empty() || !std::filesystem::exists(m_checkpointFilePath))
     {
@@ -3101,6 +3117,7 @@ void CHistoryTrafficStore::LoadCheckpoint()
     bool has_all_time = false;
     BucketAppMap entries;
     std::ifstream input{ std::filesystem::path(m_checkpointFilePath), std::ios::binary };
+    if (!input) { m_checkpointReadFailed = true; return; }
     std::wstring line;
     std::uint64_t version{};
     std::uint64_t hash = 14695981039346656037ULL, expected_hash{};
@@ -3180,7 +3197,8 @@ void CHistoryTrafficStore::LoadCheckpoint()
         }
     }
 
-    if (!version || version > 6 || malformed || ((version >= 6 || has_hash) && (!has_hash || hash != expected_hash)))
+    if (input.bad()) { m_checkpointReadFailed = true; return; }
+    if (!input.eof() || !version || version > 6 || malformed || ((version >= 6 || has_hash) && (!has_hash || hash != expected_hash)))
     {
         m_checkpointBlocked = true;
         return;
@@ -3190,6 +3208,7 @@ void CHistoryTrafficStore::LoadCheckpoint()
     if ((entries.empty() && !m_currentEngine.sources && !m_currentEngine.confidence) ||
         !TryParseBucketKey(minute_key, minute_start, minute_end) || minute_key.size() != 16)
     {
+        m_checkpointBlocked = true;
         return;
     }
     m_legacyCheckpoint = version < 6;
@@ -3208,6 +3227,13 @@ void CHistoryTrafficStore::LoadCheckpoint()
 
     if (has_all_time)
     {
+        if (m_statePendingCommit == m_currentCommitId &&
+            (m_cachedAllTimeTotal.rxBytes > checkpoint_all_time.rxBytes || m_cachedAllTimeTotal.txBytes > checkpoint_all_time.txBytes))
+        {
+            if (!Utils::QuarantineHistoryFile(m_stateFilePath)) { m_checkpointReadFailed = true; return; }
+            m_cachedAllTimeTotal = {};
+            m_hasPersistedAllTime = false;
+        }
         m_cachedAllTimeTotal.rxBytes = (std::max)(m_cachedAllTimeTotal.rxBytes, checkpoint_all_time.rxBytes);
         m_cachedAllTimeTotal.txBytes = (std::max)(m_cachedAllTimeTotal.txBytes, checkpoint_all_time.txBytes);
         m_allTimeCacheValid = true;
@@ -3223,7 +3249,16 @@ void CHistoryTrafficStore::LoadCheckpoint()
             return;
         }
     }
-    if ((committed_minute == minute_key && (m_legacyCheckpoint || committed_id == m_currentCommitId)) ||
+    if (!m_legacyCheckpoint && committed_id > m_currentCommitId)
+    {
+        ClearCheckpoint();
+        m_currentCommitId = 0;
+        m_currentEngine = {};
+        m_allTimeRecoveryFormat = 0;
+        return;
+    }
+    if ((!m_legacyCheckpoint && committed_id == m_currentCommitId) ||
+        (m_legacyCheckpoint && committed_minute == minute_key) ||
         (m_legacyCheckpoint && DailyHistoryEndsWithBlock(m_historyDir, minute_key, m_appNameById, entries)))
     {
         m_currentMinuteKey = minute_key;
@@ -3312,25 +3347,7 @@ bool CHistoryTrafficStore::SaveCheckpoint()
             + FormatStoredAppId(entry.second.txBytes));
     }
     WriteUtf8Line(output, L"checksum\t" + std::to_wstring(hash));
-    output.flush();
-    output.close();
-    if (!output)
-    {
-        LogHistoryIoFailure(L"WriteCheckpoint", temporary_path, GetLastError());
-        std::error_code error;
-        std::filesystem::remove(temporary_path, error);
-        return false;
-    }
-    if (MoveFileExW(
-            temporary_path.c_str(),
-            m_checkpointFilePath.c_str(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE)
-    {
-        LogHistoryIoFailure(L"ReplaceCheckpoint", m_checkpointFilePath, GetLastError());
-        std::error_code error;
-        std::filesystem::remove(temporary_path, error);
-        return false;
-    }
+    if (!FinishAtomicFile(output, temporary_path, m_checkpointFilePath)) return false;
     m_lastCheckpointTick = GetTickCount64();
     m_checkpointDirty = false;
     m_stateDirty = true;
@@ -3415,7 +3432,7 @@ void CHistoryTrafficStore::ClearCheckpoint() const
     std::filesystem::remove(std::filesystem::path(m_checkpointFilePath), error);
 }
 
-void CHistoryTrafficStore::LoadState()
+bool CHistoryTrafficStore::LoadState()
 {
     m_pathByApp.clear();
     InvalidateRangeCache();
@@ -3426,14 +3443,18 @@ void CHistoryTrafficStore::LoadState()
     m_hasPersistedAllTime = false;
     m_allTimeCacheValid = false;
     m_cachedAllTimeTotal = {};
+    m_statePendingCommit = 0;
 
     if (m_stateFilePath.empty() || !std::filesystem::exists(m_stateFilePath))
     {
-        return;
+        return true;
     }
 
     std::ifstream input{ std::filesystem::path(m_stateFilePath), std::ios::binary };
+    if (!input) return false;
     std::wstring line;
+    std::uint64_t hash = 14695981039346656037ULL, expected_hash{}, format{};
+    bool requires_hash{}, has_hash{}, malformed{};
     while (ReadUtf8Line(input, line))
     {
         TabReader stream(line);
@@ -3441,6 +3462,32 @@ void CHistoryTrafficStore::LoadState()
         if (!ReadTabField(stream, type))
         {
             continue;
+        }
+
+        malformed |= has_hash || line.find(L'\0') != std::wstring::npos;
+        if (type == L"checksum")
+        {
+            std::wstring value;
+            malformed |= !ReadTabField(stream, value) || !TryParseUInt64(value, expected_hash);
+            has_hash = true;
+            continue;
+        }
+        FoldCheckpointLine(hash, line);
+        if (type == L"state_checksum_version")
+        {
+            std::wstring value;
+            malformed |= !ReadTabField(stream, value) || value != L"1";
+            requires_hash = true;
+        }
+        if (type == L"history_format")
+        {
+            std::wstring value;
+            malformed |= !ReadTabField(stream, value) || !TryParseUInt64(value, format) || !format || format > 8;
+        }
+        if (type == L"pending_transaction")
+        {
+            std::wstring value;
+            malformed |= !ReadTabField(stream, value) || !TryParseUInt64(value, m_statePendingCommit);
         }
 
         if (type == L"language")
@@ -3528,7 +3575,18 @@ void CHistoryTrafficStore::LoadState()
 
     }
 
+    if (input.bad()) return false;
+    const bool invalid = !input.eof() || !format || malformed ||
+        ((requires_hash || has_hash) && (!has_hash || hash != expected_hash));
+    input.close();
+    if (invalid)
+    {
+        if (!Utils::QuarantineHistoryFile(m_stateFilePath)) return false;
+        m_engine = {};
+        return LoadState();
+    }
     m_preferredRange = NormalizeRange(m_preferredRange);
+    return true;
 }
 
 bool CHistoryTrafficStore::SaveState() const
@@ -3545,56 +3603,42 @@ bool CHistoryTrafficStore::SaveState() const
     {
         return false;
     }
-    WriteUtf8StateLine(output, L"history_format", 8);
-    WriteUtf8StateLine(output, L"history_archive_format", 2);
+    std::uint64_t hash = 14695981039346656037ULL;
+    const auto write = [&](const std::wstring& text) { FoldCheckpointLine(hash, text); WriteUtf8Line(output, text); };
+    write(L"history_format\t8");
+    write(L"state_checksum_version\t1");
+    write(L"history_archive_format\t2");
+    if (!m_currentMinuteKey.empty()) write(L"pending_transaction\t" + std::to_wstring(m_currentCommitId));
     if (m_engine.cutover)
     {
-        WriteUtf8StateLine(output, L"engine_version", 2);
-        WriteUtf8Line(output, L"engine_start\t" + std::to_wstring(m_engine.cutover));
-        WriteUtf8Line(output, L"engine_source\tETW\tEStats-qualified");
+        write(L"engine_version\t2");
+        write(L"engine_start\t" + std::to_wstring(m_engine.cutover));
+        write(L"engine_source\tETW\tEStats-qualified");
     }
     if (m_historyMigrationFormat > 0)
     {
-        WriteUtf8StateLine(output, L"history_migration_format", m_historyMigrationFormat);
+        write(L"history_migration_format\t" + std::to_wstring(m_historyMigrationFormat));
     }
     if (m_allTimeRecoveryFormat > 0 && m_historyReadHealthy)
     {
-        WriteUtf8StateLine(output, L"all_time_recovery_format", m_allTimeRecoveryFormat);
+        write(L"all_time_recovery_format\t" + std::to_wstring(m_allTimeRecoveryFormat));
     }
-    WriteUtf8StateLine(output, L"language", static_cast<int>(m_preferredLanguage));
-    WriteUtf8StateLine(output, L"range_start", FormatMinuteTime(normalized.start));
-    WriteUtf8StateLine(output, L"range_end", FormatMinuteTime(normalized.end));
+    write(L"language\t" + std::to_wstring(static_cast<int>(m_preferredLanguage)));
+    write(L"range_start\t" + FormatMinuteTime(normalized.start));
+    write(L"range_end\t" + FormatMinuteTime(normalized.end));
     if (m_allTimeCacheValid)
     {
-        WriteUtf8AllTimeEntry(output, m_cachedAllTimeTotal);
+        write(L"all_time\t" + std::to_wstring(m_cachedAllTimeTotal.rxBytes) + L"\t" + std::to_wstring(m_cachedAllTimeTotal.txBytes));
     }
     for (const auto& entry : m_pathByApp)
     {
         if (!entry.first.empty() && !entry.second.empty())
         {
-            WriteUtf8PathEntry(output, entry.first, entry.second);
+            write(L"path\t" + SanitizeTsvField(entry.first) + L"\t" + SanitizeTsvField(entry.second));
         }
     }
-    output.flush();
-    output.close();
-    if (!output)
-    {
-        LogHistoryIoFailure(L"WriteState", temporary_path, GetLastError());
-        std::error_code error;
-        std::filesystem::remove(temporary_path, error);
-        return false;
-    }
-    if (MoveFileExW(
-            temporary_path.c_str(),
-            m_stateFilePath.c_str(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE)
-    {
-        LogHistoryIoFailure(L"ReplaceState", m_stateFilePath, GetLastError());
-        std::error_code error;
-        std::filesystem::remove(temporary_path, error);
-        return false;
-    }
-    return true;
+    WriteUtf8Line(output, L"checksum\t" + std::to_wstring(hash));
+    return FinishAtomicFile(output, temporary_path, m_stateFilePath);
 }
 
 CHistoryTrafficStore::DateTimeRange CHistoryTrafficStore::GetDefaultRange()
